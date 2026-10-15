@@ -32,7 +32,6 @@ A reviewer supplies independent evidence for each rights path. Verified reuse re
 
 No case database, login, shared storage, background queue, external LLM or production deployment is included. Do not expose the app to untrusted networks with confidential recordings until access controls and retention are designed. Telemetry is disabled. Input paths and public documentation contain no client case narratives.
 
-
 ## Guarded DTW candidate refinement
 
 SampleID remains the candidate-localization stage. A new optional
@@ -54,3 +53,25 @@ remain status=`candidate`; DTW cost is not stored as probability or confidence,
 and the original SampleID similarity is preserved only as provenance from the
 recognition stage. Exact source-boundary refinement, chopped/reordered samples,
 and calibrated real-recording accuracy remain future validation work.
+
+## Optional stem-assisted comparison
+
+`separation/demucs.py` is an optional local adapter around the Demucs command-line
+interface. It separates padded candidate crops rather than complete songs,
+caches the resulting audio outside Git, and retains the crop's full mix as a
+baseline. The six-source model can estimate vocals, drums, bass, guitar, piano
+and other; model labels and audio remain imperfect estimates with bleed and
+artifacts.
+
+`alignment/stems.py` compares same-label stems and a small set of guitar/piano ↔
+other cross-pairs. Each pair is processed through the same guarded DTW routine.
+Accepted rows only indicate that the estimated stems produced an alignment that
+passed the timing guardrails. They do not establish an exact studio stem, a
+verified sample, or a final musical-element classification.
+
+The feature is excluded from production dependencies and is installed with the
+optional `stems` extra. The first run may download large model weights and CPU
+separation can take several minutes. It is exposed in the engineering test bench,
+not silently enabled in the client-facing Nature-of-Use workflow. Promotion into
+the main pipeline requires real-recording validation, resource profiling and an
+explicit review design for stem evidence.

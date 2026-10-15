@@ -8,10 +8,34 @@ coarse candidate is returned unchanged.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import math
+
 import numpy as np
 from scipy.signal import resample_poly, stft
+
 from lastrada.schemas.models import Interval
+
+
+@dataclass
+class DTWRefinementResult:
+    """Detailed evidence from one guarded DTW attempt.
+
+    `accepted` only means that the alignment passed the configured engineering
+    guardrails. It is not a probability or verified sample conclusion.
+    """
+
+    interval: Interval
+    accepted: bool
+    reason: str
+    mean_cost: float | None = None
+    pitch_shift_semitones: int | None = None
+    duration_ratio: float | None = None
+    source_duration: float | None = None
+    derivative_duration: float | None = None
+    search_start: float | None = None
+    search_end: float | None = None
+    path_points: int = 0
 
 
 def _resample(samples: np.ndarray, source_rate: int, target_rate: int) -> np.ndarray:
@@ -32,21 +56,27 @@ def _segment(audio, start: float, end: float, sample_rate: int) -> np.ndarray:
     return y[left:right]
 
 
-def _chroma(samples: np.ndarray, sample_rate: int, nperseg: int = 2048, hop: int = 512):
+def _chroma(
+    samples: np.ndarray,
+    sample_rate: int,
+    nperseg: int = 2048,
+    hop: int = 512,
+):
     """Small dependency-free chroma representation built from an STFT."""
     if len(samples) < max(512, nperseg // 2):
         return np.empty((12, 0), dtype=np.float64)
 
+    frame_size = min(nperseg, len(samples))
     _, _, z = stft(
         samples,
         fs=sample_rate,
-        nperseg=min(nperseg, len(samples)),
-        noverlap=max(0, min(nperseg, len(samples)) - hop),
+        nperseg=frame_size,
+        noverlap=max(0, frame_size - hop),
         boundary=None,
         padded=True,
     )
     magnitude = np.abs(z).astype(np.float64)
-    freqs = np.fft.rfftfreq(min(nperseg, len(samples)), d=1.0 / sample_rate)
+    freqs = np.fft.rfftfreq(frame_size, d=1.0 / sample_rate)
 
     valid = freqs >= 55.0
     freqs = freqs[valid]
@@ -58,12 +88,11 @@ def _chroma(samples: np.ndarray, sample_rate: int, nperseg: int = 2048, hop: int
     pitch_classes = np.mod(np.rint(midi).astype(int), 12)
 
     chroma = np.zeros((12, magnitude.shape[1]), dtype=np.float64)
-    for pc in range(12):
-        mask = pitch_classes == pc
+    for pitch_class in range(12):
+        mask = pitch_classes == pitch_class
         if np.any(mask):
-            chroma[pc] = magnitude[mask].sum(axis=0)
+            chroma[pitch_class] = magnitude[mask].sum(axis=0)
 
-    # Compress dominant bins and normalize each time frame.
     chroma = np.sqrt(np.maximum(chroma, 0.0))
     norms = np.linalg.norm(chroma, axis=0, keepdims=True)
     chroma /= np.maximum(norms, 1e-12)
@@ -77,50 +106,51 @@ def _local_cost(source: np.ndarray, target: np.ndarray) -> np.ndarray:
 
 def _subsequence_dtw(cost: np.ndarray):
     """Align the full source (rows) to the best subsequence of target (columns)."""
-    m, n = cost.shape
-    if not m or not n:
+    source_frames, target_frames = cost.shape
+    if not source_frames or not target_frames:
         return None, float("inf")
 
-    acc = np.full((m, n), np.inf, dtype=np.float64)
-    back = np.full((m, n), -1, dtype=np.int8)
+    accumulated = np.full((source_frames, target_frames), np.inf, dtype=np.float64)
+    back = np.full((source_frames, target_frames), -1, dtype=np.int8)
 
-    # Source may begin anywhere in target.
-    acc[0, :] = cost[0, :]
+    # The source query may begin anywhere in the target search region.
+    accumulated[0, :] = cost[0, :]
 
-    for i in range(1, m):
-        for j in range(n):
+    for source_index in range(1, source_frames):
+        for target_index in range(target_frames):
             choices = []
-            # diagonal
-            if j > 0:
-                choices.append((acc[i - 1, j - 1], 0))
-            # consume source while holding target
-            choices.append((acc[i - 1, j], 1))
-            # consume target while holding source
-            if j > 0:
-                choices.append((acc[i, j - 1], 2))
-            best_cost, move = min(choices, key=lambda x: x[0])
-            acc[i, j] = cost[i, j] + best_cost
-            back[i, j] = move
+            if target_index > 0:
+                choices.append((accumulated[source_index - 1, target_index - 1], 0))
+            choices.append((accumulated[source_index - 1, target_index], 1))
+            if target_index > 0:
+                choices.append((accumulated[source_index, target_index - 1], 2))
+            best_cost, move = min(choices, key=lambda item: item[0])
+            accumulated[source_index, target_index] = (
+                cost[source_index, target_index] + best_cost
+            )
+            back[source_index, target_index] = move
 
-    end_j = int(np.argmin(acc[-1]))
-    i, j = m - 1, end_j
-    path = [(i, j)]
+    end_target = int(np.argmin(accumulated[-1]))
+    source_index, target_index = source_frames - 1, end_target
+    path = [(source_index, target_index)]
 
-    while i > 0:
-        move = int(back[i, j])
+    while source_index > 0:
+        move = int(back[source_index, target_index])
         if move == 0:
-            i -= 1
-            j -= 1
+            source_index -= 1
+            target_index -= 1
         elif move == 1:
-            i -= 1
-        elif move == 2 and j > 0:
-            j -= 1
+            source_index -= 1
+        elif move == 2 and target_index > 0:
+            target_index -= 1
         else:
             break
-        path.append((i, j))
+        path.append((source_index, target_index))
 
     path.reverse()
-    mean_cost = float(acc[-1, end_j] / max(len(path), 1))
+    mean_cost = float(
+        accumulated[-1, end_target] / max(len(path), 1)
+    )
     return np.asarray(path, dtype=int), mean_cost
 
 
@@ -136,7 +166,25 @@ def duration_ratio_is_plausible(
     return minimum_ratio <= ratio <= maximum_ratio
 
 
-def refine_candidate_dtw(
+def _rejected(
+    interval: Interval,
+    reason: str,
+    *,
+    source_duration: float | None = None,
+    search_start: float | None = None,
+    search_end: float | None = None,
+) -> DTWRefinementResult:
+    return DTWRefinementResult(
+        interval=interval,
+        accepted=False,
+        reason=reason,
+        source_duration=source_duration,
+        search_start=search_start,
+        search_end=search_end,
+    )
+
+
+def refine_candidate_dtw_details(
     original,
     new,
     interval: Interval,
@@ -148,35 +196,50 @@ def refine_candidate_dtw(
     minimum_duration: float = 0.5,
     analysis_rate: int = 16000,
     hop: int = 512,
-):
-    """Refine one coarse SampleID candidate, conservatively.
-
-    The original/source endpoints remain the SampleID source excerpt. DTW only
-    tightens the new-work placement. Unrealistic compression/expansion is rejected.
-    """
+) -> DTWRefinementResult:
+    """Refine one candidate and return alignment evidence plus the interval."""
     if interval.original_start is None or interval.original_end is None:
-        return interval
+        return _rejected(interval, "source timestamps unavailable")
     if interval.original_end <= interval.original_start:
-        return interval
+        return _rejected(interval, "invalid source interval")
 
     source_duration = interval.original_end - interval.original_start
     if source_duration < minimum_duration:
-        return interval
+        return _rejected(
+            interval,
+            "source interval shorter than minimum duration",
+            source_duration=source_duration,
+        )
 
     search_start = max(0.0, interval.new_start - search_padding)
     search_end = min(new.duration, interval.new_end + search_padding)
     if search_end - search_start < minimum_duration:
-        return interval
+        return _rejected(
+            interval,
+            "derivative search region shorter than minimum duration",
+            source_duration=source_duration,
+            search_start=search_start,
+            search_end=search_end,
+        )
 
     source_y = _segment(
-        original, interval.original_start, interval.original_end, analysis_rate
+        original,
+        interval.original_start,
+        interval.original_end,
+        analysis_rate,
     )
     target_y = _segment(new, search_start, search_end, analysis_rate)
     source_chroma = _chroma(source_y, analysis_rate, hop=hop)
     target_chroma = _chroma(target_y, analysis_rate, hop=hop)
 
     if source_chroma.shape[1] < 2 or target_chroma.shape[1] < 2:
-        return interval
+        return _rejected(
+            interval,
+            "not enough chroma frames",
+            source_duration=source_duration,
+            search_start=search_start,
+            search_end=search_end,
+        )
 
     best = None
     seconds_per_frame = hop / analysis_rate
@@ -187,15 +250,18 @@ def refine_candidate_dtw(
         if path is None or not len(path):
             continue
 
-        target_frames = path[:, 1]
-        refined_start = search_start + float(target_frames.min()) * seconds_per_frame
-        refined_end = search_start + float(target_frames.max() + 1) * seconds_per_frame
+        matched_target_frames = path[:, 1]
+        refined_start = (
+            search_start + float(matched_target_frames.min()) * seconds_per_frame
+        )
+        refined_end = (
+            search_start
+            + float(matched_target_frames.max() + 1) * seconds_per_frame
+        )
         refined_start = max(0.0, refined_start)
         refined_end = min(new.duration, refined_end)
         derivative_duration = refined_end - refined_start
 
-        # Reject DTW's common failure mode: collapsing a long source into a tiny
-        # harmonic fragment, or stretching it implausibly far.
         if derivative_duration < minimum_duration:
             continue
         if not duration_ratio_is_plausible(
@@ -205,28 +271,58 @@ def refine_candidate_dtw(
             maximum_duration_ratio,
         ):
             continue
-
-        # The refinement should still touch the SampleID candidate it is refining,
-        # rather than silently jumping to a different nearby occurrence.
         if refined_end <= interval.new_start or refined_start >= interval.new_end:
             continue
 
-        candidate = (mean_cost, shift, refined_start, refined_end)
-        if best is None or candidate[0] < best[0]:
+        candidate = {
+            "mean_cost": float(mean_cost),
+            "pitch_shift": int(shift),
+            "refined_start": float(refined_start),
+            "refined_end": float(refined_end),
+            "duration": float(derivative_duration),
+            "path_points": int(len(path)),
+        }
+        if best is None or candidate["mean_cost"] < best["mean_cost"]:
             best = candidate
 
     if best is None:
-        return interval
+        return _rejected(
+            interval,
+            "no alignment passed overlap and duration guardrails",
+            source_duration=source_duration,
+            search_start=search_start,
+            search_end=search_end,
+        )
 
-    _, _shift, refined_start, refined_end = best
-    return Interval(
-        new_start=float(refined_start),
-        new_end=float(refined_end),
+    refined = Interval(
+        new_start=best["refined_start"],
+        new_end=best["refined_end"],
         original_start=interval.original_start,
         original_end=interval.original_end,
         source="dtw_chroma_local_alignment",
         status="candidate",
-        # Preserve SampleID's similarity as candidate evidence. DTW cost is not
-        # squeezed into this calibrated-looking field.
         similarity=interval.similarity,
     )
+    return DTWRefinementResult(
+        interval=refined,
+        accepted=True,
+        reason="alignment passed guardrails",
+        mean_cost=best["mean_cost"],
+        pitch_shift_semitones=best["pitch_shift"],
+        duration_ratio=best["duration"] / source_duration,
+        source_duration=source_duration,
+        derivative_duration=best["duration"],
+        search_start=search_start,
+        search_end=search_end,
+        path_points=best["path_points"],
+    )
+
+
+def refine_candidate_dtw(
+    original,
+    new,
+    interval: Interval,
+    **kwargs,
+):
+    """Compatibility wrapper returning only the refined or original interval."""
+    return refine_candidate_dtw_details(original, new, interval, **kwargs).interval
