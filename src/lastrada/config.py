@@ -17,6 +17,14 @@ class Settings(StrictModel):
     sampleid_similarity_threshold: float = Field(default=0.8, ge=-1, le=1)
     sampleid_batch_size: int = Field(default=4, ge=1, le=16)
 
+    # Optional DTW refinement applied only after SampleID proposes a candidate.
+    dtw_enabled: bool = True
+    dtw_search_padding_seconds: float = Field(default=4.0, ge=0.0, le=30.0)
+    dtw_max_pitch_shift_semitones: int = Field(default=6, ge=0, le=12)
+    dtw_min_duration_ratio: float = Field(default=0.5, gt=0, le=1.0)
+    dtw_max_duration_ratio: float = Field(default=1.5, ge=1.0, le=3.0)
+    dtw_minimum_duration_seconds: float = Field(default=0.5, gt=0, le=10.0)
+
 
 def load_settings(path="configs/default.json"):
     return (

@@ -6,6 +6,7 @@ from lastrada.publishing.analyze import analyze as analyze_publishing
 from lastrada.synthesis.narrative import draft
 from lastrada.recognition.sampleid_adapter import SampleIDUnavailable
 from lastrada.alignment.local import refine_candidate
+from lastrada.alignment.dtw import refine_candidate_dtw
 from lastrada.config import Settings
 
 
@@ -61,18 +62,52 @@ def analyze_pair(
                 ran = True
                 result.methods["sampleid"] = "local_cpu_chunk_embeddings"
                 result.timings_seconds["model_inference"] = perf_counter() - t
+
                 t = perf_counter()
-                # Preserve coarse intervals; separate patches retain refinement provenance.
-                refined = [refine_candidate(original, new, i) for i in candidates]
+                refined_candidates = []
+                dtw_used = False
+
+                for candidate in candidates:
+                    # First prefer direct waveform correlation when the recording
+                    # material is nearly unchanged.
+                    direct = refine_candidate(original, new, candidate)
+                    if direct.source == "direct_waveform_local_alignment":
+                        refined_candidates.append(direct)
+                        continue
+
+                    # If direct matching cannot refine the candidate, try guarded
+                    # chroma/DTW for moderate pitch/time transformations.
+                    if settings.dtw_enabled:
+                        dtw = refine_candidate_dtw(
+                            original,
+                            new,
+                            candidate,
+                            search_padding=settings.dtw_search_padding_seconds,
+                            max_pitch_shift_semitones=settings.dtw_max_pitch_shift_semitones,
+                            minimum_duration_ratio=settings.dtw_min_duration_ratio,
+                            maximum_duration_ratio=settings.dtw_max_duration_ratio,
+                            minimum_duration=settings.dtw_minimum_duration_seconds,
+                        )
+                        if dtw.source == "dtw_chroma_local_alignment":
+                            refined_candidates.append(dtw)
+                            dtw_used = True
+                            continue
+
+                    # Conservative fallback: preserve Sony's coarse candidate.
+                    refined_candidates.append(candidate)
+
+                candidates = refined_candidates
                 result.timings_seconds["localization"] += perf_counter() - t
-                candidates = [
-                    r if r.source == "direct_waveform_local_alignment" else c
-                    for r, c in zip(refined, candidates)
-                ]
+                result.methods["alignment"] = (
+                    "direct_waveform_then_guarded_dtw"
+                    if dtw_used
+                    else "direct_waveform_or_coarse_sampleid"
+                )
             except SampleIDUnavailable as exc:
                 result.methods["sampleid"] = f"unavailable: {exc}"
                 result.warnings.append(str(exc))
                 result.timings_seconds["model_inference"] = perf_counter() - t
+
         t = perf_counter()
         result.master = analyze_master(measurement, candidates, ran)
         result.timings_seconds["classification"] = perf_counter() - t
@@ -80,10 +115,12 @@ def analyze_pair(
         result.master = PathResult(
             rights_type="master", locate=Locate(detection_status="not_requested")
         )
+
     t = perf_counter()
     result.nature_of_use = draft(result)
     result.timings_seconds["narrative_generation"] = perf_counter() - t
     result.timings_seconds["total"] = perf_counter() - start
+
     if synthetic:
         result.warnings.append("SYNTHETIC DEMONSTRATION: generated signals, not a historical case.")
     for work in (intake.original_work, intake.new_work):

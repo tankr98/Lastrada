@@ -9,5 +9,11 @@
   "sampleid_chunk_seconds": 5.0,
   "sampleid_hop_seconds": 1.0,
   "sampleid_similarity_threshold": 0.8,
-  "sampleid_batch_size": 4
+  "sampleid_batch_size": 4,
+  "dtw_enabled": true,
+  "dtw_search_padding_seconds": 4.0,
+  "dtw_max_pitch_shift_semitones": 6,
+  "dtw_min_duration_ratio": 0.5,
+  "dtw_max_duration_ratio": 1.5,
+  "dtw_minimum_duration_seconds": 0.5
 }
