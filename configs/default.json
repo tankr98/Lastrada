@@ -1,0 +1,19 @@
+{
+  "sample_rate": 8000,
+  "reference_components": 8,
+  "free_components": 8,
+  "iterations": 80,
+  "activation_threshold": 0.55,
+  "minimum_interval_seconds": 0.25,
+  "max_duration_seconds": 600,
+  "sampleid_chunk_seconds": 5.0,
+  "sampleid_hop_seconds": 1.0,
+  "sampleid_similarity_threshold": -1.0,
+  "sampleid_batch_size": 4,
+  "dtw_enabled": true,
+  "dtw_search_padding_seconds": 4.0,
+  "dtw_max_pitch_shift_semitones": 6,
+  "dtw_min_duration_ratio": 0.5,
+  "dtw_max_duration_ratio": 1.5,
+  "dtw_minimum_duration_seconds": 0.5
+}
