@@ -10,7 +10,7 @@ from lastrada.master.analyze import analyze as analyze_master
 from lastrada.measurement.pfnmf import measure
 from lastrada.publishing.analyze import analyze as analyze_publishing
 from lastrada.recognition.sampleid_adapter import SampleIDUnavailable
-from lastrada.schemas.models import Analysis, Interval, Locate, PathResult
+from lastrada.schemas.models import Analysis, Interval, Locate, PathResult, StemEvidence
 from lastrada.synthesis.narrative import draft
 
 
@@ -28,6 +28,49 @@ def _best_separated_stem_evidence(comparison):
         ),
         None,
     )
+
+
+def _stem_verdict(item):
+    if item.accepted:
+        return "accepted"
+    if item.mean_dtw_cost is not None or item.duration_ratio is not None:
+        return "weak"
+    return "rejected"
+
+
+def _stem_interpretation(item, verdict):
+    if verdict == "accepted" and item.same_label:
+        return "strong supporting evidence"
+    if verdict == "accepted":
+        return "possible separator spillover"
+    if verdict == "weak":
+        return "no useful alignment"
+    if item.source_stem == "vocals" and item.derivative_stem == "vocals":
+        return "no supporting vocal alignment"
+    if item.same_label:
+        return "no useful alignment"
+    return "no useful cross-stem alignment"
+
+
+def _stem_evidence_records(comparisons):
+    records = []
+    for candidate_number, comparison in enumerate(comparisons, start=1):
+        for item in comparison.evidence:
+            verdict = _stem_verdict(item)
+            records.append(
+                StemEvidence(
+                    candidate_number=candidate_number,
+                    source_stem=item.source_stem,
+                    new_song_stem=item.derivative_stem,
+                    dtw_result=verdict,
+                    duration_ratio=item.duration_ratio,
+                    interpretation=_stem_interpretation(item, verdict),
+                    reason=item.reason or "No additional DTW detail",
+                    mean_dtw_cost=item.mean_dtw_cost,
+                    pitch_shift_semitones=item.pitch_shift_semitones,
+                )
+            )
+    return records
 
 
 def stem_assist_candidates(original, new, candidates, separator, settings):
@@ -136,6 +179,7 @@ def _run_optional_stem_assistance(result, original, new, candidates, settings):
             separator,
             settings,
         )
+        result.stem_evidence = _stem_evidence_records(comparisons)
         result.timings_seconds["stem_separation"] = perf_counter() - started
     except (StemSeparationUnavailable, OSError, RuntimeError, ValueError) as exc:
         result.methods["stems"] = f"unavailable: {exc}"
