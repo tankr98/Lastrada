@@ -6,13 +6,20 @@ def by_label(elements, label):
     return next(e for e in elements if e.label == label)
 
 
+def enable_demo(app):
+    # UI regressions exercise deterministic synthetic PF-NMF, independent of the
+    # separately tested Sony runtime/checkpoint and its optional model loading.
+    by_label(app.checkbox, "Use Sony SampleID + guarded DTW timing analysis").uncheck().run()
+    by_label(app.checkbox, "Use a clearly labeled synthetic demonstration").check().run()
+
+
 def test_streamlit_synthetic_workflow_and_review_export():
     app = AppTest.from_file(
         Path(__file__).resolve().parents[1] / "app.py", default_timeout=30
     ).run()
     by_label(app.button, "Start").click().run()
     assert not app.exception
-    by_label(app.checkbox, "Use a clearly labeled synthetic demonstration").check().run()
+    enable_demo(app)
     by_label(app.button, "Find suggested moments").click().run()
     assert not app.exception
     assert app.session_state["analysis"].synthetic
@@ -53,7 +60,7 @@ def test_demo_requires_metadata_and_respects_master_scope():
         Path(__file__).resolve().parents[1] / "app.py", default_timeout=30
     ).run()
     by_label(app.button, "Start").click().run()
-    by_label(app.checkbox, "Use a clearly labeled synthetic demonstration").check().run()
+    enable_demo(app)
     by_label(app.text_input, "New artist").set_value("   ")
     by_label(app.button, "Find suggested moments").click().run()
     assert any("Enter a title and artist" in e.value for e in app.error)
@@ -71,7 +78,7 @@ def test_next_back_flow_saves_draft_and_preserves_edits():
     ).run()
     by_label(app.button, "Start").click().run()
     assert by_label(app.button, "Next: Listen & explore →").disabled
-    by_label(app.checkbox, "Use a clearly labeled synthetic demonstration").check().run()
+    enable_demo(app)
     by_label(app.button, "Find suggested moments").click().run()
     by_label(app.button, "Next: Listen & explore →").click().run()
     assert app.session_state["workflow_tab"] == "3 · Listen & check"
@@ -127,7 +134,7 @@ def test_next_does_not_revoke_unchanged_approval():
         Path(__file__).resolve().parents[1] / "app.py", default_timeout=30
     ).run()
     by_label(app.button, "Start").click().run()
-    by_label(app.checkbox, "Use a clearly labeled synthetic demonstration").check().run()
+    enable_demo(app)
     by_label(app.button, "Find suggested moments").click().run()
     for element in app.selectbox:
         if element.label == "Have you checked this use?":
@@ -160,7 +167,7 @@ def test_prefilled_times_require_confirmation_and_loop_answers_fill_only_blanks(
     assert app.session_state["dark_mode"] is True
     by_label(app.toggle, "Dark mode").set_value(False).run()
     assert app.session_state["dark_mode"] is False
-    by_label(app.checkbox, "Use a clearly labeled synthetic demonstration").check().run()
+    enable_demo(app)
     by_label(app.radio, "Type of reuse").set_value("Master")
     by_label(app.button, "Find suggested moments").click().run()
     by_label(app.selectbox, "Have you checked this use?").set_value("verified").run()
@@ -195,7 +202,7 @@ def test_seven_screen_navigation_keeps_musical_details():
     ).run()
     by_label(app.button, "Start").click().run()
     assert by_label(app.button, "Next: Track details →").disabled
-    by_label(app.checkbox, "Use a clearly labeled synthetic demonstration").check().run()
+    enable_demo(app)
     by_label(app.button, "Next: Track details →").click().run()
     assert app.session_state["workflow_tab"] == "2 · Track details"
     by_label(app.radio, "Type of reuse").set_value("Master")
@@ -241,7 +248,7 @@ def test_landing_restart_clears_case_and_preserves_theme():
     assert len(app.file_uploader) == 0
     by_label(app.toggle, "Dark mode").set_value(False).run()
     by_label(app.button, "Start").click().run()
-    by_label(app.checkbox, "Use a clearly labeled synthetic demonstration").check().run()
+    enable_demo(app)
     by_label(app.button, "Next: Track details →").click().run()
     assert "preview_analysis" in app.session_state
     by_label(app.button, "Find suggested moments").click().run()
@@ -260,7 +267,7 @@ def test_times_acceptance_and_quality_gates():
         Path(__file__).resolve().parents[1] / "app.py", default_timeout=30
     ).run()
     by_label(app.button, "Start").click().run()
-    by_label(app.checkbox, "Use a clearly labeled synthetic demonstration").check().run()
+    enable_demo(app)
     by_label(app.radio, "Type of reuse").set_value("Master")
     by_label(app.button, "Find suggested moments").click().run()
     assert by_label(app.button, "Next: Describe the sound →").disabled
@@ -283,7 +290,8 @@ def test_times_acceptance_and_quality_gates():
     by_label(app.radio, "Do these times match the sample you hear?").set_value(
         "No, let me edit"
     ).run()
-    assert by_label(app.button, "Next: Describe the sound →").disabled
+    assert not by_label(app.button, "Next: Describe the sound →").disabled
+    assert by_label(app.button, "Next: Your Nature of Use →").disabled
     by_label(app.checkbox, "I’ve listened and confirmed these times").check()
     by_label(app.selectbox, "Have you checked this use?").set_value("verified").run()
     assert not by_label(app.button, "Next: Describe the sound →").disabled
@@ -294,14 +302,14 @@ def test_recording_sample_can_finish_without_replayed_music():
         Path(__file__).resolve().parents[1] / "app.py", default_timeout=30
     ).run()
     by_label(app.button, "Start").click().run()
-    by_label(app.checkbox, "Use a clearly labeled synthetic demonstration").check().run()
+    enable_demo(app)
     by_label(app.button, "Find suggested moments").click().run()
     # Reproduce the confusing state: accepting an empty publishing table.
-    app.radio(key="review_publishing_agreement").set_value("Yes, use these times").run()
+    app.selectbox(key="review_publishing_status").set_value("verified").run()
     assert by_label(app.button, "Next: Describe the sound →").disabled
     app.selectbox(key="review_publishing_status").set_value("not_detected").run()
     assert app.session_state["review_publishing_checked"] is True
-    assert app.session_state["review_publishing_agreement"] == "Not checked"
+    assert app.session_state["review_publishing_agreement"] == "I'll add times before final review"
     assert app.radio(key="review_publishing_agreement").disabled
     # The recording evidence is still required independently.
     assert by_label(app.button, "Next: Describe the sound →").disabled
@@ -352,7 +360,7 @@ def test_reuse_analysis_and_media_without_work_on_hidden_screens(monkeypatch):
         Path(__file__).resolve().parents[1] / "app.py", default_timeout=30
     ).run()
     by_label(app.button, "Start").click().run()
-    by_label(app.checkbox, "Use a clearly labeled synthetic demonstration").check().run()
+    enable_demo(app)
     by_label(app.button, "Next: Track details →").click().run()
     assert measure.call_count == 1
     by_label(app.radio, "Type of reuse").set_value("Master")
@@ -377,3 +385,32 @@ def test_reuse_analysis_and_media_without_work_on_hidden_screens(monkeypatch):
     by_label(app.button, "New Sample").click().run()
     assert "playback_bytes" not in app.session_state
     assert "decoded_pair" not in app.session_state
+
+
+def test_both_confirmed_can_describe_without_automatic_publishing_times():
+    app = AppTest.from_file(
+        Path(__file__).resolve().parents[1] / "app.py", default_timeout=30
+    ).run()
+    by_label(app.button, "Start").click().run()
+    enable_demo(app)
+    by_label(app.button, "Find suggested moments").click().run()
+    for rights in ("master", "publishing"):
+        app.selectbox(key=f"review_{rights}_status").set_value("verified")
+    app.run()
+    assert not app.exception
+    assert not by_label(app.button, "Next: Describe the sound →").disabled
+    by_label(app.button, "Next: Describe the sound →").click().run()
+    for rights in ("master", "publishing"):
+        for field in ("element", "method", "repetition", "role"):
+            app.text_input(key=f"review_{rights}_{field}").set_value("Creator detail")
+    app.run()
+    by_label(app.button, "Next: Place the sample →").click().run()
+    assert app.session_state["workflow_tab"] == "5 · Place the sample"
+    assert by_label(app.button, "Next: Review your draft →").disabled
+    assert by_label(app.button, "Generate Nature of Use draft").disabled
+    assert by_label(app.button, "Next: Your Nature of Use →").disabled
+    # Fill publishing times independently, without copying master measurements.
+    assert app.session_state["review_publishing_seed_intervals"] == []
+    app.radio(key="review_publishing_agreement").set_value("Add times now").run()
+    assert not app.checkbox(key="review_publishing_times_confirmed").disabled
+    assert not app.exception

@@ -378,7 +378,11 @@ def check_use(rights):
     absent = st.session_state.get(prefix + "status") == "not_detected"
     st.session_state[prefix + "checked"] = absent
     if absent:
-        st.session_state[prefix + "agreement"] = "Not checked"
+        st.session_state[prefix + "agreement"] = (
+            "Not checked"
+            if st.session_state.get(prefix + "seed_intervals")
+            else "I'll add times before final review"
+        )
         st.session_state[prefix + "times_confirmed"] = False
 
 
@@ -390,8 +394,6 @@ def accept_times(rights):
         st.session_state[prefix + "status"] = "verified"
     else:
         st.session_state[prefix + "times_confirmed"] = False
-        if st.session_state.get(prefix + "status") == "verified":
-            st.session_state[prefix + "status"] = "candidate"
 
 
 def apply_suggestion(rights, kind):
@@ -891,7 +893,7 @@ def render_review():
                         }[x],
                     )
                     st.caption(
-                        "Choose ‘I’ve confirmed this use’ only after listening. Similarity scores cannot confirm a sample for you."
+                        "Choose ‘I’ve confirmed this use’ after listening. This confirms the type of use; timestamps can be completed here or on Place the sample before final review."
                     )
                 if status == "not_detected":
                     st.markdown(
@@ -909,6 +911,11 @@ def render_review():
                             if rights == "publishing"
                             else "No recording sample — nothing to add for this check."
                         )
+                if current_step == 4 and status != "not_detected":
+                    st.markdown(
+                        f"<style>.st-key-stage_2_{rights}_times {{display:flex !important;}}</style>",
+                        unsafe_allow_html=True,
+                    )
                 with st.container(key=f"stage_2_{rights}_times"):
                     st.markdown("### Check the moments")
                     st.caption(
@@ -953,15 +960,17 @@ def render_review():
                     agreement = st.radio(
                         "Do these times match the sample you hear?"
                         if seeds
-                        else "Add the times you hear — no times were found for this use.",
-                        ["Not checked", "Yes, use these times", "No, let me edit"],
+                        else "No automatic times are available for this use. When would you like to add them?",
+                        ["Not checked", "Yes, use these times", "No, let me edit"]
+                        if seeds
+                        else ["I'll add times before final review", "Add times now"],
                         key=key + "agreement",
                         horizontal=True,
                         on_change=accept_times,
                         args=(rights,),
                         disabled=status == "not_detected",
                     )
-                    editable = agreement == "No, let me edit"
+                    editable = agreement in ("No, let me edit", "Add times now")
                     rows = [
                         {
                             "new_start": i.new_start,
@@ -1212,12 +1221,16 @@ def render_review():
             prefix = f"review_{rights}_"
             item = reviewed_paths.get(rights)
             if item is None:
-                step_errors[2].append(f"{rights}: fix invalid timestamps")
+                step_errors[4].append(f"{rights}: fix invalid timestamps")
+                if st.session_state.get(prefix + "status") not in ("verified", "not_detected"):
+                    step_errors[2].append(f"{rights}: confirm whether this use applies")
                 continue
             if item["locate"]["detection_status"] == "not_detected":
                 if not st.session_state.get(prefix + "checked"):
                     step_errors[4].append(f"{rights}: confirm the no-use finding")
                 continue
+            if st.session_state.get(prefix + "status") != "verified":
+                step_errors[2].append(f"{rights}: confirm whether this use applies")
             if (
                 item["locate"]["detection_status"] != "verified"
                 or not item["locate"]["sample_occurrences"]
@@ -1225,7 +1238,9 @@ def render_review():
                     i["status"] == "expert_verified" for i in item["locate"]["sample_occurrences"]
                 )
             ):
-                step_errors[2].append(f"{rights}: confirm the use and accept or correct its times")
+                step_errors[4].append(
+                    f"{rights}: accept or add the sample times in Check the moments"
+                )
             for field, label in [
                 ("element", "what you used"),
                 ("method", "how you used it"),
