@@ -73,6 +73,19 @@ def _stem_evidence_records(comparisons):
     return records
 
 
+def _should_run_recording_evidence(intake, adapter, settings):
+    """Run Sony/DTW/stem evidence even when master rights are not requested.
+
+    The legal master path remains not_requested unless master is in the intake scope;
+    this helper only controls whether recording evidence is computed for reviewer use.
+    """
+    return (
+        "master" in intake.analysis_scope
+        or adapter is not None
+        or settings.stem_enabled
+    )
+
+
 def stem_assist_candidates(original, new, candidates, separator, settings):
     """Run Demucs + guarded DTW on the strongest paired candidates.
 
@@ -241,7 +254,7 @@ def analyze_pair(
         "narrative_generation": 0.0,
         "stem_separation": 0.0,
     }
-    if "master" in intake.analysis_scope:
+    if _should_run_recording_evidence(intake, adapter, settings):
         t = perf_counter()
         measurement = measure(
             original,
@@ -325,9 +338,14 @@ def analyze_pair(
                 result.warnings.append(str(exc))
                 result.timings_seconds["model_inference"] = perf_counter() - t
 
-        t = perf_counter()
-        result.master = analyze_master(measurement, candidates, ran)
-        result.timings_seconds["classification"] = perf_counter() - t
+        if "master" in intake.analysis_scope:
+            t = perf_counter()
+            result.master = analyze_master(measurement, candidates, ran)
+            result.timings_seconds["classification"] = perf_counter() - t
+        else:
+            result.master = PathResult(
+                rights_type="master", locate=Locate(detection_status="not_requested")
+            )
     else:
         result.master = PathResult(
             rights_type="master", locate=Locate(detection_status="not_requested")

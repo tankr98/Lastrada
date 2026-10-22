@@ -133,3 +133,17 @@ def test_stem_evidence_records_match_reviewer_table_verdicts():
     assert records[3].interpretation == "no useful alignment"
     assert records[0].duration_ratio == 1.04
 
+
+def test_recording_evidence_is_not_gated_by_master_scope():
+    publishing_only = SimpleNamespace(analysis_scope=["publishing"])
+
+    assert pipeline._should_run_recording_evidence(
+        publishing_only, object(), Settings(stem_enabled=False)
+    )
+    assert pipeline._should_run_recording_evidence(
+        publishing_only, None, Settings(stem_enabled=True)
+    )
+    assert not pipeline._should_run_recording_evidence(
+        publishing_only, None, Settings(stem_enabled=False)
+    )
+
