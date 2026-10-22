@@ -27,6 +27,11 @@ from lastrada.ingestion.dataset import load_dataset, retrieve_examples
 from lastrada.ingestion.filenames import prefill_credits
 from lastrada.config import load_settings
 from lastrada.reporting.suggestions import suggested_intervals, timing_questions, confirmed_prefills
+from lastrada.reporting.loop_groups import (
+    group_loop_families,
+    loop_family_rows,
+    raw_interval_rows,
+)
 
 settings = load_settings()
 
@@ -1000,9 +1005,36 @@ def render_review():
                             result, rights
                         )
                     seeds = st.session_state[key + "seed_intervals"]
-                    st.markdown("#### Check the moments")
+                    loop_families = group_loop_families(
+                        seeds,
+                        result.durations.get("new"),
+                    )
+                    if loop_families:
+                        st.markdown("#### Grouped use pattern")
+                        st.caption(
+                            "Rows that point to the same source passage are grouped into "
+                            "one use family. Overlapping Sony windows are collapsed, while "
+                            "every exact timestamp remains available below."
+                        )
+                        st.dataframe(
+                            pd.DataFrame(loop_family_rows(loop_families)),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+                        raw_rows = raw_interval_rows(loop_families)
+                        with st.expander(
+                            f"View all {len(raw_rows)} exact timestamp suggestion(s)"
+                        ):
+                            st.dataframe(
+                                pd.DataFrame(raw_rows),
+                                use_container_width=True,
+                                hide_index=True,
+                            )
+
+                    st.markdown("#### Confirm the pattern")
                     st.caption(
-                        "Suggested moments carry straight into your document when you accept them. Listen first; edit them if they are wrong."
+                        "Review the grouped pattern first. Accept the exact occurrences, or "
+                        "choose edit to open the full timestamp editor."
                     )
                     if rights == "master" and seeds:
                         paired = [
@@ -1013,27 +1045,9 @@ def render_review():
                         ]
                         if paired:
                             st.info(
-                                f"{len(paired)} paired original ↔ new-track timing "
-                                "suggestion(s) came from the Sony/refinement pipeline. "
-                                "Listen before accepting or editing them."
+                                f"{len(paired)} paired Sony/refinement row(s) were condensed "
+                                f"into {len(loop_families)} source/use group(s)."
                             )
-                            with st.expander("Timing methods"):
-                                st.dataframe(
-                                    pd.DataFrame(
-                                        [
-                                            {
-                                                "method": item.source,
-                                                "original_start": item.original_start,
-                                                "original_end": item.original_end,
-                                                "new_start": item.new_start,
-                                                "new_end": item.new_end,
-                                            }
-                                            for item in paired
-                                        ]
-                                    ),
-                                    use_container_width=True,
-                                    hide_index=True,
-                                )
 
                     agreement = st.radio(
                         "Do these times match the sample you hear?"
@@ -1058,27 +1072,48 @@ def render_review():
                         }
                         for i in seeds
                     ]
-                    intervals = st.data_editor(
-                        pd.DataFrame(
-                            rows, columns=["new_start", "new_end", "original_start", "original_end"]
-                        ),
-                        num_rows="dynamic",
-                        disabled=status == "not_detected" or not editable,
-                        key=key + "intervals",
-                        column_config={
-                            c: st.column_config.NumberColumn(
-                                {
-                                    "new_start": "Your track · start (s)",
-                                    "new_end": "Your track · end (s)",
-                                    "original_start": "Original · start (s)",
-                                    "original_end": "Original · end (s)",
-                                }[c],
-                                min_value=0.0,
-                                step=0.01,
-                            )
-                            for c in ["new_start", "new_end", "original_start", "original_end"]
-                        },
+                    base_intervals = pd.DataFrame(
+                        rows,
+                        columns=[
+                            "new_start",
+                            "new_end",
+                            "original_start",
+                            "original_end",
+                        ],
                     )
+                    if editable:
+                        st.markdown("#### Edit exact occurrences")
+                        st.caption(
+                            "The grouped summary stays intact until you save; edit, add, "
+                            "or remove individual occurrences here."
+                        )
+                        intervals = st.data_editor(
+                            base_intervals,
+                            num_rows="dynamic",
+                            disabled=status == "not_detected",
+                            key=key + "intervals",
+                            column_config={
+                                c: st.column_config.NumberColumn(
+                                    {
+                                        "new_start": "Your track · start (s)",
+                                        "new_end": "Your track · end (s)",
+                                        "original_start": "Original · start (s)",
+                                        "original_end": "Original · end (s)",
+                                    }[c],
+                                    min_value=0.0,
+                                    step=0.01,
+                                )
+                                for c in [
+                                    "new_start",
+                                    "new_end",
+                                    "original_start",
+                                    "original_end",
+                                ]
+                            },
+                        )
+                    else:
+                        intervals = base_intervals
+
                     with st.container(key=key + "manual_confirmation"):
                         manual_confirmed = st.checkbox(
                             "I’ve listened and confirmed these times",
