@@ -24,20 +24,23 @@ class Settings(StrictModel):
     sampleid_batch_size: int = Field(default=4, ge=1, le=16)
 
     # Optional DTW refinement applied only after SampleID proposes a candidate.
+    # The 0.1x-10x range is intentionally permissive for exploratory testing and
+    # materially increases the chance of false alignments, so every result still
+    # requires listening review.
     dtw_enabled: bool = True
     dtw_search_padding_seconds: float = Field(default=4.0, ge=0.0, le=30.0)
     dtw_max_pitch_shift_semitones: int = Field(default=6, ge=0, le=12)
-    dtw_min_duration_ratio: float = Field(default=0.5, gt=0, le=1.0)
-    dtw_max_duration_ratio: float = Field(default=1.5, ge=1.0, le=3.0)
+    dtw_min_duration_ratio: float = Field(default=0.1, gt=0, le=1.0)
+    dtw_max_duration_ratio: float = Field(default=10.0, ge=1.0, le=10.0)
     dtw_minimum_duration_seconds: float = Field(default=0.5, gt=0, le=10.0)
 
-    # Optional second-stage validation on a small number of Sony/DTW candidates.
-    # This is disabled by default because Demucs is compute-intensive. Local users
-    # can enable it with LASTRADA_STEM_ENABLED=1 after installing the stems extra.
+    # Optional second-stage validation across every Sony candidate returned by
+    # the current adapter (which is capped at 50 candidates). This can be very
+    # compute-intensive on CPU; candidate-region outputs are cached by Demucs.
     stem_enabled: bool = False
     stem_model_name: Literal["htdemucs_6s", "htdemucs"] = "htdemucs_6s"
     stem_device: Literal["cpu", "cuda"] = "cpu"
-    stem_max_candidates: int = Field(default=1, ge=1, le=3)
+    stem_max_candidates: int = Field(default=50, ge=1, le=50)
     stem_separation_padding_seconds: float = Field(default=4.0, ge=1.0, le=12.0)
     stem_include_cross_other: bool = True
 
