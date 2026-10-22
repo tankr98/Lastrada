@@ -1,6 +1,10 @@
 import json
+import os
 from pathlib import Path
+from typing import Literal
+
 from pydantic import Field
+
 from lastrada.schemas.models import StrictModel
 
 
@@ -27,10 +31,65 @@ class Settings(StrictModel):
     dtw_max_duration_ratio: float = Field(default=1.5, ge=1.0, le=3.0)
     dtw_minimum_duration_seconds: float = Field(default=0.5, gt=0, le=10.0)
 
+    # Optional second-stage validation on a small number of Sony/DTW candidates.
+    # This is disabled by default because Demucs is compute-intensive. Local users
+    # can enable it with LASTRADA_STEM_ENABLED=1 after installing the stems extra.
+    stem_enabled: bool = False
+    stem_model_name: Literal["htdemucs_6s", "htdemucs"] = "htdemucs_6s"
+    stem_device: Literal["cpu", "cuda"] = "cpu"
+    stem_max_candidates: int = Field(default=1, ge=1, le=3)
+    stem_separation_padding_seconds: float = Field(default=4.0, ge=1.0, le=12.0)
+    stem_include_cross_other: bool = True
+
+
+def _optional_bool(name: str) -> bool | None:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be one of: 1/0, true/false, yes/no, on/off")
+
+
+def _environment_overrides() -> dict:
+    overrides = {}
+
+    enabled = _optional_bool("LASTRADA_STEM_ENABLED")
+    if enabled is not None:
+        overrides["stem_enabled"] = enabled
+
+    cross_other = _optional_bool("LASTRADA_STEM_CROSS_OTHER")
+    if cross_other is not None:
+        overrides["stem_include_cross_other"] = cross_other
+
+    text_fields = {
+        "LASTRADA_STEM_MODEL": "stem_model_name",
+        "LASTRADA_STEM_DEVICE": "stem_device",
+    }
+    for environment_name, field_name in text_fields.items():
+        value = os.getenv(environment_name)
+        if value and value.strip():
+            overrides[field_name] = value.strip()
+
+    numeric_fields = {
+        "LASTRADA_STEM_MAX_CANDIDATES": ("stem_max_candidates", int),
+        "LASTRADA_STEM_PADDING_SECONDS": (
+            "stem_separation_padding_seconds",
+            float,
+        ),
+    }
+    for environment_name, (field_name, converter) in numeric_fields.items():
+        value = os.getenv(environment_name)
+        if value and value.strip():
+            overrides[field_name] = converter(value.strip())
+
+    return overrides
+
 
 def load_settings(path="configs/default.json"):
-    return (
-        Settings.model_validate(json.loads(Path(path).read_text()))
-        if Path(path).is_file()
-        else Settings()
-    )
+    data = json.loads(Path(path).read_text()) if Path(path).is_file() else {}
+    data.update(_environment_overrides())
+    return Settings.model_validate(data)
