@@ -78,6 +78,18 @@ class Feature(StrictModel):
     review_required: bool = True
 
 
+class StemEvidence(StrictModel):
+    candidate_number: int = Field(ge=1)
+    source_stem: str = Field(min_length=1)
+    new_song_stem: str = Field(min_length=1)
+    dtw_result: Literal["accepted", "weak", "rejected"]
+    duration_ratio: float | None = Field(default=None, gt=0)
+    interpretation: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    mean_dtw_cost: float | None = Field(default=None, ge=0)
+    pitch_shift_semitones: int | None = None
+
+
 class Locate(StrictModel):
     detection_status: Status = "unknown"
     sample_detected: bool | None = None
@@ -157,6 +169,7 @@ class Analysis(StrictModel):
     durations: dict[str, float] = Field(default_factory=dict)
     timings_seconds: dict[str, float] = Field(default_factory=dict)
     methods: dict[str, str] = Field(default_factory=dict)
+    stem_evidence: list[StemEvidence] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     synthetic: bool = False
 

@@ -131,6 +131,36 @@ def resolve_sampleid_checkpoint(override=None, allow_download=False):
     )
 
 
+def _stem_evidence_frame(result):
+    columns = [
+        "Candidate",
+        "Source stem",
+        "New-song stem",
+        "DTW result",
+        "Duration ratio",
+        "Interpretation",
+    ]
+    rows = [
+        {
+            "Candidate": item.candidate_number,
+            "Source stem": item.source_stem,
+            "New-song stem": item.new_song_stem,
+            "DTW result": item.dtw_result,
+            "Duration ratio": (
+                f"{item.duration_ratio:.2f}×"
+                if item.duration_ratio is not None
+                else "—"
+            ),
+            "Interpretation": item.interpretation,
+        }
+        for item in getattr(result, "stem_evidence", [])
+    ]
+    frame = pd.DataFrame(rows, columns=columns)
+    if not frame.empty and frame["Candidate"].nunique() == 1:
+        frame = frame.drop(columns=["Candidate"])
+    return frame
+
+
 st.set_page_config(
     page_title="Lastrada · Nature of Use",
     page_icon="🎵",
@@ -348,6 +378,16 @@ with st.sidebar:
             help=(
                 "Sony proposes paired regions in the original and new track. "
                 "Direct waveform matching or guarded DTW then refines those timings."
+            ),
+        )
+        use_stems = st.checkbox(
+            "Run Demucs stem-assisted comparison",
+            value=True,
+            disabled=not use_sampleid,
+            help=(
+                "Separates the strongest Sony candidate into estimated stems and "
+                "runs guarded DTW on selected stem pairs. Stem evidence is generated "
+                "for any selected rights scope."
             ),
         )
         detected_checkpoint, checkpoint_note = resolve_sampleid_checkpoint(
@@ -612,6 +652,10 @@ with views[0]:
                     ),
                     analysis_scope=["publishing", "master"] if scope == "Both" else [scope.lower()],
                 )
+                run_stem_assistance = bool(use_sampleid and use_stems)
+                analysis_settings = settings.model_copy(
+                    update={"stem_enabled": run_stem_assistance}
+                )
                 analysis_start = perf_counter()
                 t = perf_counter()
                 reusable = "preview_analysis" in st.session_state and st.session_state.get(
@@ -633,7 +677,7 @@ with views[0]:
                     sampleid_checkpoint_override,
                     allow_download=use_sampleid,
                 )
-                if use_sampleid and "master" in intake.analysis_scope:
+                if use_sampleid:
                     if checkpoint is None:
                         adapter_error = checkpoint_note
                         st.warning(
@@ -656,7 +700,11 @@ with views[0]:
                                 + ". PF-NMF will remain available as fallback context."
                             )
                 adapter_setup_time = perf_counter() - adapter_setup_start
-                reused_preview = reusable and (not use_sampleid or adapter is None)
+                reused_preview = (
+                    reusable
+                    and (not use_sampleid or adapter is None)
+                    and not run_stem_assistance
+                )
                 with st.spinner("Measuring audio locally…"):
                     result = (
                         reuse_preview(st.session_state.preview_analysis, intake)
@@ -667,7 +715,7 @@ with views[0]:
                             new,
                             adapter=adapter,
                             synthetic=synthetic,
-                            settings=settings,
+                            settings=analysis_settings,
                         )
                     )
                 if adapter_error:
@@ -855,6 +903,32 @@ def render_review():
         st.rerun(scope="app")
     result = st.session_state.get("analysis")
     if result is not None:
+        stem_frame = _stem_evidence_frame(result)
+        st.markdown("### Stem evidence")
+        st.caption(
+            "Demucs estimates instrument stems for the strongest Sony candidate region, "
+            "then guarded DTW compares the source and new-song stem pairs. This evidence "
+            "is shown regardless of the selected rights scope."
+        )
+        if stem_frame.empty:
+            stem_status = result.methods.get(
+                "stems", "not_run: no stem evidence status was recorded"
+            )
+            st.info(
+                "No stem comparison rows were generated for this run. "
+                f"Status: {stem_status}"
+            )
+        else:
+            st.dataframe(
+                stem_frame,
+                use_container_width=True,
+                hide_index=True,
+            )
+            st.caption(
+                "Accepted means the pair passed engineering guardrails. It is supporting "
+                "evidence, not a verified instrument identification or legal conclusion."
+            )
+
         reviewed_paths = {}
         for rights in result.input.analysis_scope:
             path = getattr(result, rights).model_copy(deep=True)
@@ -917,15 +991,19 @@ def render_review():
                         unsafe_allow_html=True,
                     )
                 with st.container(key=f"stage_2_{rights}_times"):
-                    st.markdown("### Check the moments")
+                    st.markdown("### Review the evidence")
                     st.caption(
-                        "Suggested moments carry straight into your document when you accept them. Listen first; you only need to edit if they are wrong."
+                        "Use the stem verdicts as supporting evidence, then listen and confirm or edit the paired timestamps."
                     )
                     if key + "seed_intervals" not in st.session_state:
                         st.session_state[key + "seed_intervals"] = suggested_intervals(
                             result, rights
                         )
                     seeds = st.session_state[key + "seed_intervals"]
+                    st.markdown("#### Check the moments")
+                    st.caption(
+                        "Suggested moments carry straight into your document when you accept them. Listen first; edit them if they are wrong."
+                    )
                     if rights == "master" and seeds:
                         paired = [
                             item
