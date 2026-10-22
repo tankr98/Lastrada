@@ -29,72 +29,13 @@ jobs:
               text = path.read_text(encoding="utf-8")
               count = text.count(old)
               if count != 1:
-                  raise RuntimeError(f"Expected one match in {path}, found {count}")
+                  raise RuntimeError(
+                      f"Expected one match in {path}, found {count}: {old[:80]!r}"
+                  )
               path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
           app = Path("app.py")
-          replace_once(
-              app,
-              '''def _stem_evidence_frame(result):
-                  columns = [
-                      "Candidate",
-                      "Source stem",
-                      "New-song stem",
-                      "DTW result",
-                      "Duration ratio",
-                      "Interpretation",
-                  ]
-                  rows = [
-                      {
-                          "Candidate": item.candidate_number,
-                          "Source stem": item.source_stem,
-                          "New-song stem": item.new_song_stem,
-                          "DTW result": item.dtw_result,
-                          "Duration ratio": (
-                              f"{item.duration_ratio:.2f}×"
-                              if item.duration_ratio is not None
-                              else "—"
-                          ),
-                          "Interpretation": item.interpretation,
-                      }
-                      for item in getattr(result, "stem_evidence", [])
-                  ]
-                  frame = pd.DataFrame(rows, columns=columns)
-                  if not frame.empty and frame["Candidate"].nunique() == 1:
-                      frame = frame.drop(columns=["Candidate"])
-                  return frame
-          ''',
-              '''def _stem_evidence_frame(result):
-                  columns = [
-                      "Candidate",
-                      "Source stem",
-                      "New-song stem",
-                      "DTW result",
-                      "Duration ratio",
-                      "Interpretation",
-                  ]
-                  rows = [
-                      {
-                          "Candidate": item.candidate_number,
-                          "Source stem": item.source_stem,
-                          "New-song stem": item.new_song_stem,
-                          "DTW result": item.dtw_result,
-                          "Duration ratio": (
-                              f"{item.duration_ratio:.2f}×"
-                              if item.duration_ratio is not None
-                              else "—"
-                          ),
-                          "Interpretation": item.interpretation,
-                      }
-                      for item in getattr(result, "stem_evidence", [])
-                  ]
-                  frame = pd.DataFrame(rows, columns=columns)
-                  if not frame.empty and frame["Candidate"].nunique() == 1:
-                      frame = frame.drop(columns=["Candidate"])
-                  return frame
-
-
-          def _render_stem_runtime_status(result):
+          helper = '''def _render_stem_runtime_status(result):
               method = result.methods.get("stems", "")
               evidence = list(getattr(result, "stem_evidence", []))
               if evidence:
@@ -131,24 +72,18 @@ jobs:
                   )
               elif method:
                   st.info("Demucs stem status: " + method)
-          ''',
-          )
 
+
+          '''
+          replace_once(app, "st.set_page_config(\n", helper + "st.set_page_config(\n")
+
+          caption_end = '''                                + (f" · pipeline: {alignment_method}" if alignment_method else "")
+                              )
+          '''
           replace_once(
               app,
-              '''                            st.caption(
-                                  "Automated timing evidence · "
-                                  + summary
-                                  + (f" · pipeline: {alignment_method}" if alignment_method else "")
-                              )
-          ''',
-              '''                            st.caption(
-                                  "Automated timing evidence · "
-                                  + summary
-                                  + (f" · pipeline: {alignment_method}" if alignment_method else "")
-                              )
-                              _render_stem_runtime_status(result)
-          ''',
+              caption_end,
+              caption_end + "                            _render_stem_runtime_status(result)\n",
           )
 
           pipeline = Path("src/lastrada/pipeline.py")
