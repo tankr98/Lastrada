@@ -91,7 +91,7 @@ class DemucsSeparator:
         model_name: str = "htdemucs_6s",
         device: str = "cpu",
         cache_dir: str | Path = "cache/demucs",
-        segment_seconds: float = 7.5,
+        segment_seconds: int | float = 7,
         overlap: float = 0.10,
         timeout_seconds: int = 1800,
     ):
@@ -106,10 +106,17 @@ class DemucsSeparator:
         if segment_seconds <= 0:
             raise ValueError("Demucs segment length must be positive")
 
+        # Demucs' command-line parser requires --segment to be an integer.
+        # Floor positive values so older callers that supplied 7.5 remain
+        # compatible while staying below the transformer model's segment cap.
+        normalized_segment = int(segment_seconds)
+        if normalized_segment <= 0:
+            raise ValueError("Demucs segment length must be at least one second")
+
         self.model_name = model_name
         self.device = device
         self.cache_dir = Path(cache_dir)
-        self.segment_seconds = float(segment_seconds)
+        self.segment_seconds = normalized_segment
         self.overlap = float(overlap)
         self.timeout_seconds = int(timeout_seconds)
 
