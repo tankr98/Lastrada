@@ -1,17 +1,18 @@
 # Local Sony + DTW + stem-assisted workflow
 
-Stem separation is an optional second-stage validation step in the normal seven-screen Lastrada website. It does not launch the old DTW Lab.
+Stem separation is a second-stage validation step in the normal seven-screen Lastrada website. It does not launch the old DTW Lab.
 
 ## Analysis order
 
 1. Sony SampleID proposes paired original/new-track candidates.
 2. Direct waveform alignment or guarded full-mix DTW refines each candidate.
-3. When `LASTRADA_STEM_ENABLED=1`, Demucs separates only the strongest padded candidate region(s), not the full recordings.
+3. When stem assistance is enabled, Demucs separates the padded candidate regions for every Sony candidate returned by the adapter, up to its current maximum of 50 candidates. It does not separate the full recordings.
 4. Guarded DTW compares selected estimated stem pairs: matching labels plus guitar/piano ↔ `other` spillover checks.
-5. A successful stem alignment may refine a still-coarse Sony interval. It does not replace an existing direct-waveform or full-mix DTW refinement.
-6. Step 3 shows the final paired timings and provenance inside the normal listening-review table.
+5. The exploratory DTW duration-ratio range is 0.1× to 10×. This intentionally permits extreme speed changes, but it also materially increases false-positive risk.
+6. A successful stem alignment may refine a still-coarse Sony interval. It does not replace an existing direct-waveform or full-mix DTW refinement.
+7. Step 3 shows the stem evidence and the final paired timings inside the normal listening-review flow.
 
-Demucs stems are model estimates with possible bleed and artifacts. A label such as `guitar → guitar` is supporting evidence, not a final musical-element conclusion.
+Demucs stems are model estimates with possible bleed and artifacts. A label such as `guitar → guitar` is supporting evidence, not a final musical-element conclusion. Every accepted row still requires listening review.
 
 ## Windows PowerShell
 
@@ -30,15 +31,27 @@ Place `sampleid-best.ckpt` at `checkpoints\sampleid-best.ckpt` or set its full p
 $env:LASTRADA_SAMPLEID_CHECKPOINT = (Resolve-Path ".\checkpoints\sampleid-best.ckpt").Path
 ```
 
-Enable stem assistance and keep the first test conservative:
+Enable exhaustive stem assistance:
 
 ```powershell
 $env:LASTRADA_STEM_ENABLED = "1"
 $env:LASTRADA_STEM_MODEL = "htdemucs_6s"
 $env:LASTRADA_STEM_DEVICE = "cpu"
-$env:LASTRADA_STEM_MAX_CANDIDATES = "1"
+$env:LASTRADA_STEM_MAX_CANDIDATES = "50"
 $env:LASTRADA_STEM_PADDING_SECONDS = "4.0"
 $env:LASTRADA_STEM_CROSS_OTHER = "1"
+```
+
+Verify the effective settings:
+
+```powershell
+.\.venv\Scripts\python.exe -c "from lastrada.config import load_settings; s=load_settings(); print({'min_ratio': s.dtw_min_duration_ratio, 'max_ratio': s.dtw_max_duration_ratio, 'stem_candidates': s.stem_max_candidates})"
+```
+
+Expected:
+
+```text
+{'min_ratio': 0.1, 'max_ratio': 10.0, 'stem_candidates': 50}
 ```
 
 Verify Sony, then launch the main website:
@@ -48,11 +61,11 @@ Verify Sony, then launch the main website:
 .\.venv\Scripts\python.exe -m streamlit run app.py
 ```
 
-The first `htdemucs_6s` analysis downloads Demucs model weights and can be slow on CPU. Results are cached under `cache\demucs` for repeat runs.
+The first `htdemucs_6s` analysis downloads Demucs model weights. Evaluating every Sony candidate can be very slow on CPU and can create hundreds of stem-pair rows. Results are cached under `cache\demucs` for repeat runs.
 
 ## Expected Step 3 result
 
-When stem-assisted DTW refines a coarse Sony interval, its timing source appears as, for example:
+The stem-evidence table includes a `Candidate` column when more than one Sony candidate is evaluated. When stem-assisted DTW refines a coarse Sony interval, its timing source appears as, for example:
 
 ```text
 stem-assisted DTW · guitar → guitar
