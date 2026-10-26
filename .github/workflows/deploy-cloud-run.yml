@@ -1,0 +1,41 @@
+name: Deploy Lastrada to Cloud Run
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - deploy/cloud-run
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  SERVICE_NAME: lastrada-stem-fast
+  REGION: us-central1
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Deploy source to Cloud Run
+        run: |
+          gcloud run deploy "$SERVICE_NAME"             --source .             --project "${{ secrets.GCP_PROJECT_ID }}"             --region "$REGION"             --service-account "${{ secrets.GCP_SERVICE_ACCOUNT }}"             --cpu 4             --memory 16Gi             --timeout 3600             --concurrency 1             --max-instances 1             --min-instances 0             --allow-unauthenticated             --set-env-vars "LASTRADA_SAMPLEID_CHECKPOINT_URL=https://zenodo.org/records/17413869/files/sampleid-best.ckpt?download=1,LASTRADA_STEM_ENABLED=1,LASTRADA_STEM_MODEL=htdemucs_6s,LASTRADA_STEM_DEVICE=cpu,LASTRADA_STEM_FAST_MAX_CANDIDATES=1,LASTRADA_STEM_PADDING_SECONDS=4.0,LASTRADA_STEM_CROSS_OTHER=1,LASTRADA_CACHE_DIR=/tmp/lastrada-cache,OMP_NUM_THREADS=2,MKL_NUM_THREADS=2"
+
+      - name: Show public URL
+        run: |
+          gcloud run services describe "$SERVICE_NAME"             --project "${{ secrets.GCP_PROJECT_ID }}"             --region "$REGION"             --format="value(status.url)"
