@@ -81,3 +81,23 @@ under the configured DTW rules. It does not establish that:
 
 Use full-mix Sony evidence, timing consistency, stem agreement and human listening
 together. Keep all automated outputs at `candidate` status until expert review.
+
+## Streamlit stem installation
+
+On `feat/stem-assisted-main-flow`, production `requirements.txt` installs
+`-e .[stems]` and pins `demucs==4.1.0`. This makes Demucs available to the main
+application without running the Windows helper script. Version 4.1.0 imports
+with the pinned CPU Torch runtime without requiring a matching torchaudio wheel.
+
+After the branch updates, confirm Community Cloud rebuilds its dependencies;
+reboot the existing app if needed and inspect the build logs for Demucs 4.1.0.
+Demucs downloads its own weights on first separation, independently of the Sony
+checkpoint URL. The host must reach the model provider and have enough memory
+and CPU for separation.
+
+Local verification: Demucs import, CLI help and model listing passed; installed
+package compatibility and pip's production-requirements resolution passed; all
+87 repository tests passed. A generated-audio separation smoke test reached the
+model download but was blocked by this workspace's network proxy (403 on both
+the Hugging Face route and legacy provider fallback). Successful pretrained
+separation and the Streamlit rebuild have not been verified.
