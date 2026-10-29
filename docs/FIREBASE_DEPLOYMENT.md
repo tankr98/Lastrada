@@ -1,5 +1,9 @@
 # Firebase web deployment
 
+**Deployment paused: the user requires a billing-disabled free plan.** The
+Cloud Run/Storage proposal below is not approved and must not be applied. See
+[the local $0 fallback](ZERO_COST_LOCAL.md) for current options.
+
 This is a new Firebase Hosting UI and Python Cloud Run backend. It does not run
 Streamlit. The existing Streamlit app and deployment remain available while the
 new deployment is validated. Target project: `lastrada-64bab`.
