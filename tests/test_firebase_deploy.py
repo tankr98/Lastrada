@@ -57,6 +57,7 @@ def test_apply_plan_uses_private_worker_and_never_enables_billing(monkeypatch, t
     module = bootstrap()
     monkeypatch.setattr(module, "ROOT", tmp_path)
     (tmp_path / "web/public").mkdir(parents=True)
+    (tmp_path / "firebase.json").write_text((ROOT / "firebase.json").read_text())
     monkeypatch.setattr(module.shutil, "which", lambda _command: "/tool")
     monkeypatch.setattr(module, "exists", lambda *_args: False)
     calls = []
@@ -73,17 +74,24 @@ def test_apply_plan_uses_private_worker_and_never_enables_billing(monkeypatch, t
             return "https://" + command[4] + ".example.test"
         if "apps:list" in command:
             return json.dumps({"result": [{"platform": "WEB", "appId": "test-app"}]})
+        if "hosting:sites:list" in command:
+            return json.dumps({"result": {"sites": [{"name": "projects/lastrada-64bab/sites/lastrada-review"}]}})
         if "apps:sdkconfig" in command:
             return json.dumps(
                 {"result": {"sdkConfig": {"projectId": "lastrada-64bab", "apiKey": "public-test"}}}
             )
+        if "deploy" in command and "hosting" in command:
+            hosting = json.loads(Path(command[command.index("--config") + 1]).read_text())
+            assert hosting["hosting"]["site"] == "lastrada-review"
         if command[:3] == ("gcloud", "builds", "submit"):
             build = json.loads(Path(command[command.index("--config") + 1]).read_text())
             assert build["steps"][0]["env"] == ["DOCKER_BUILDKIT=1"]
         return "" if capture else None
 
     monkeypatch.setattr(module, "run", run)
-    module.apply("lastrada-64bab", "us-central1", module.DEFAULT_MODEL)
+    module.apply("lastrada-64bab", "us-central1", module.DEFAULT_MODEL,
+                 app_id="test-app", hosting_site="lastrada-review",
+                 confirm_hosting="lastrada-64bab/lastrada-review")
     deploys = [c for c in calls if c[:3] == ("gcloud", "run", "deploy")]
     worker = next(c for c in deploys if c[3] == "lastrada-worker")
     api = next(c for c in deploys if c[3] == "lastrada-api")
@@ -94,3 +102,44 @@ def test_apply_plan_uses_private_worker_and_never_enables_billing(monkeypatch, t
     assert not any("keys" in c for c in calls)
     config = json.loads((tmp_path / "web/public/config.json").read_text())
     assert config["firebase"]["projectId"] == "lastrada-64bab"
+
+
+def test_ambiguous_firebase_targets_stop_before_any_commands(monkeypatch):
+    import pytest
+
+    module = bootstrap()
+    calls = []
+    monkeypatch.setattr(module, "run", lambda *args, **kwargs: calls.append(args))
+    for app, site, confirmation in [(None, None, None), ("app", "site", None),
+                                    ("app", "site", "wrong/site")]:
+        with pytest.raises(SystemExit, match="No targets are inferred"):
+            module.select_firebase_target("project", app, site, confirmation)
+    assert calls == []
+
+
+def test_existing_repository_and_queue_fail_closed(monkeypatch):
+    import json
+    import pytest
+
+    module = bootstrap()
+    monkeypatch.setattr(module, "exists", lambda *args: True)
+    monkeypatch.setattr(module, "run", lambda *args, **kwargs: json.dumps({"labels": {}}))
+    with pytest.raises(SystemExit, match="unmarked Artifact"):
+        module.check_existing_targets("project", "us-central1", None)
+    monkeypatch.setattr(module, "run", lambda *args, **kwargs: json.dumps(
+        {"labels": {"lastrada-managed": "firebase-web"}}))
+    with pytest.raises(SystemExit, match="queue ownership"):
+        module.check_existing_targets("project", "us-central1", None)
+    module.check_existing_targets("project", "us-central1",
+                                 "projects/project/locations/us-central1/queues/lastrada-analysis")
+
+
+def test_firebase_app_selection_rejects_another_projects_app(monkeypatch):
+    import json
+    import pytest
+
+    module = bootstrap()
+    monkeypatch.setattr(module, "run", lambda *args, **kwargs: json.dumps(
+        {"result": [{"platform": "WEB", "appId": "different-app"}]}))
+    with pytest.raises(SystemExit, match="does not belong"):
+        module.select_firebase_target("project", "requested-app", "site", "project/site")

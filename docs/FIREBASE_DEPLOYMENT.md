@@ -40,7 +40,10 @@ permission for the API to act as the task account, task-account-only invocation
 of the private worker, and build repository/logging permissions. It creates no
 service-account keys. It refuses to enable billing and requires billing already
 linked to the project. It refuses to change unmarked existing case/build buckets,
-service accounts, or Cloud Run services.
+service accounts, Cloud Run services, or Artifact Registry repositories. Existing
+queues require approval of their exact resource name. Firebase app and Hosting
+site selection are mandatory; replacing the selected site requires an explicit
+`PROJECT/SITE` confirmation before provisioning starts.
 
 Cloud Run, Cloud Build, Artifact Registry, Tasks, Storage and network usage may
 incur charges. Zero minimum instances avoids idle runtime allocation. These
@@ -64,16 +67,30 @@ into chat.
    python deploy/bootstrap.py --project lastrada-64bab
    ```
 
-3. After the resource/IAM/cost plan has been approved, run:
+3. Inspect Firebase Console → Project settings → Your apps for the exact WEB
+   app ID, and Hosting for the intended existing site ID. Select them explicitly;
+   the script does not create an app or choose the first existing app. Review
+   existing Hosting content: the following command replaces that site's content.
+   After the resource/IAM/cost plan and exact Hosting target have been approved,
+   substitute those IDs and run:
 
    ```bash
-   python deploy/bootstrap.py --project lastrada-64bab --apply --approve-resources
+   python deploy/bootstrap.py --project lastrada-64bab --apply --approve-resources \
+     --firebase-app-id YOUR_WEB_APP_ID --hosting-site YOUR_SITE_ID \
+     --confirm-hosting lastrada-64bab/YOUR_SITE_ID
    ```
 
    This enables required APIs, creates the bounded resources, builds/deploys the
    container, and deploys Hosting. Firebase CLI may request its own OAuth login.
    If billing is disabled, the script stops without changing it. Resolve access
    errors before retrying; inspect resources after an interrupted deployment.
+   If `lastrada-analysis` already exists, inspect its ownership, pending jobs and
+   settings before approving adoption with
+   `--approve-existing-queue projects/lastrada-64bab/locations/us-central1/queues/lastrada-analysis`.
+   An unmarked existing Artifact Registry repository is blocked rather than adopted.
+   App, site, repository and queue checks run before cloud provisioning; login
+   uses standard interactive OAuth. A missing API or denied inspection also stops
+   the preflight rather than treating the resource as absent.
 4. In Firebase Console → Authentication → Sign-in method, enable **Google** and
    choose the support email. Check that the deployed Hosting domain appears in
    Authentication → Settings → Authorized domains. Anyone with a verified Google
@@ -96,7 +113,7 @@ Lifecycle cleanup is asynchronous, not an exact seven-day deletion deadline.
 
 ## Verification performed in Codex
 
-- 110 Python tests passed, including ownership isolation, Google-provider checks,
+- 113 Python tests passed, including ownership isolation, Google-provider checks,
   quotas, timestamp/review validation, export gating and mocked provisioning.
 - Browser test passed upload → timestamp confirmation → review → HTML download
   and reload/resume. Google identity and cloud transport were mocked; the real

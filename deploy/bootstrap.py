@@ -77,7 +77,55 @@ def write_json(path, data):
     return str(path)
 
 
-def apply(project, region, model_url):
+def select_firebase_target(project, app_id, hosting_site, confirm_hosting):
+    """Require exact app/site selection before any provisioning or content writes."""
+    if not app_id or not hosting_site or confirm_hosting != f"{project}/{hosting_site}":
+        raise SystemExit(
+            "Select --firebase-app-id and --hosting-site, and explicitly approve replacing "
+            "that site's content with --confirm-hosting PROJECT/SITE. No targets are inferred."
+        )
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{2,62}", hosting_site):
+        raise SystemExit("Invalid Hosting site ID")
+    firebase = ["npx", "--yes", "firebase-tools@15.4.0"]
+    run(*firebase, "login", "--no-localhost")
+    apps = json.loads(run(*firebase, "apps:list", "--project", project, "--json", capture=True))["result"]
+    if isinstance(apps, dict):
+        apps = apps.get("apps", [])
+    if not any(a.get("platform") == "WEB" and a.get("appId") == app_id for a in apps):
+        raise SystemExit("The explicitly selected Firebase WEB app does not belong to this project")
+    config = json.loads(run(*firebase, "apps:sdkconfig", "WEB", app_id,
+                            "--project", project, "--json", capture=True))["result"]["sdkConfig"]
+    if config.get("projectId") != project:
+        raise SystemExit("Firebase SDK configuration project does not match the target")
+    sites = json.loads(run(*firebase, "hosting:sites:list", "--project", project,
+                           "--json", capture=True))["result"]
+    if isinstance(sites, dict):
+        sites = sites.get("sites", [])
+    expected = f"projects/{project}/sites/{hosting_site}"
+    if not any(x.get("name") == expected for x in sites):
+        raise SystemExit("Selected Hosting site was not found in this project; create/select it explicitly")
+    return firebase, config
+
+
+def check_existing_targets(project, region, approved_queue):
+    repo_command = ("gcloud", "artifacts", "repositories", "describe", "lastrada",
+                    "--location", region, "--project", project)
+    if exists(*repo_command):
+        data = json.loads(run(*repo_command, "--format=json", capture=True))
+        if data.get("labels", {}).get("lastrada-managed") != "firebase-web":
+            raise SystemExit("Refusing to reuse existing unmarked Artifact Registry repository lastrada")
+    queue_command = ("gcloud", "tasks", "queues", "describe", "lastrada-analysis",
+                     "--location", region, "--project", project)
+    queue_name = f"projects/{project}/locations/{region}/queues/lastrada-analysis"
+    if exists(*queue_command) and approved_queue != queue_name:
+        raise SystemExit(
+            "Existing queue ownership cannot be established. Review its jobs/settings and explicitly "
+            "approve adopting it with --approve-existing-queue " + queue_name
+        )
+
+
+def apply(project, region, model_url, *, app_id=None, hosting_site=None,
+          confirm_hosting=None, approved_queue=None):
     if not shutil.which("gcloud") or not shutil.which("npx"):
         raise SystemExit("Run this in Google Cloud Shell, which supplies gcloud and Node.js.")
     account = run("gcloud", "config", "get-value", "account", capture=True)
@@ -90,6 +138,10 @@ def apply(project, region, model_url):
         raise SystemExit(
             "Billing is not enabled. No billing changes were made; obtain approval before enabling it."
         )
+    firebase, firebase_config = select_firebase_target(
+        project, app_id, hosting_site, confirm_hosting
+    )
+    check_existing_targets(project, region, approved_queue)
     services = [
         "run.googleapis.com",
         "cloudbuild.googleapis.com",
@@ -156,6 +208,7 @@ def apply(project, region, model_url):
             "create",
             "lastrada",
             "--repository-format=docker",
+            "--labels=lastrada-managed=firebase-web",
             "--location",
             region,
             "--project",
@@ -189,7 +242,7 @@ def apply(project, region, model_url):
     )
     cases = f"{project}-lastrada-cases"
     builds = f"{project}-lastrada-builds"
-    origins = [f"https://{project}.web.app", f"https://{project}.firebaseapp.com"]
+    origins = [f"https://{hosting_site}.web.app", f"https://{hosting_site}.firebaseapp.com"]
     with tempfile.TemporaryDirectory() as directory:
         temp = Path(directory)
         for bucket, days in [(cases, 7), (builds, 1)]:
@@ -496,35 +549,15 @@ def apply(project, region, model_url):
             "--format=value(status.url)",
             capture=True,
         )
-    # Firebase CLI uses its own interactive OAuth sign-in; no keys or tokens in chat.
-    firebase = ["npx", "--yes", "firebase-tools@15.4.0"]
-    run(*firebase, "login", "--no-localhost")
-    apps = json.loads(run(*firebase, "apps:list", "--project", project, "--json", capture=True))[
-        "result"
-    ]
-    if isinstance(apps, dict):
-        apps = apps.get("apps", [])
-    web_apps = [a for a in apps if a["platform"] == "WEB"]
-    if not web_apps:
-        run(*firebase, "apps:create", "WEB", "Lastrada", "--project", project)
-        apps = json.loads(
-            run(*firebase, "apps:list", "--project", project, "--json", capture=True)
-        )["result"]
-        web_apps = [a for a in apps if a["platform"] == "WEB"]
-    config = json.loads(
-        run(
-            *firebase,
-            "apps:sdkconfig",
-            "WEB",
-            web_apps[0]["appId"],
-            "--project",
-            project,
-            "--json",
-            capture=True,
-        )
-    )["result"]["sdkConfig"]
-    write_json(ROOT / "web/public/config.json", {"firebase": config, "apiBase": api_url})
-    run(*firebase, "deploy", "--only", "hosting", "--project", project)
+    write_json(ROOT / "web/public/config.json", {"firebase": firebase_config, "apiBase": api_url})
+    # An explicit site prevents overwriting an implicitly selected default site.
+    hosting_config = json.loads((ROOT / "firebase.json").read_text())
+    hosting_config["hosting"]["site"] = hosting_site
+    hosting_config["hosting"]["public"] = str(ROOT / "web/public")
+    with tempfile.TemporaryDirectory() as directory:
+        config_path = write_json(Path(directory) / "firebase.json", hosting_config)
+        run(*firebase, "deploy", "--only", "hosting", "--project", project,
+            "--config", config_path)
     print(
         "Deployment commands completed. Verify Google sign-in and a generated-audio case before client use."
     )
@@ -544,6 +577,10 @@ def main():
     parser.add_argument("--model-url", default=DEFAULT_MODEL)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--approve-resources", action="store_true")
+    parser.add_argument("--firebase-app-id")
+    parser.add_argument("--hosting-site")
+    parser.add_argument("--confirm-hosting", help="Explicit approval to replace content at PROJECT/SITE")
+    parser.add_argument("--approve-existing-queue", help="Exact reviewed queue resource name, if it already exists")
     args = parser.parse_args()
     if not re.fullmatch(r"[a-z][a-z0-9-]{4,28}[a-z0-9]", args.project) or not re.fullmatch(
         r"[a-z]+-[a-z]+\d+", args.region
@@ -557,7 +594,9 @@ def main():
             parser.error(
                 "Review the resource/cost/IAM plan and add --approve-resources only after approval"
             )
-        apply(args.project, args.region, args.model_url)
+        apply(args.project, args.region, args.model_url, app_id=args.firebase_app_id,
+              hosting_site=args.hosting_site, confirm_hosting=args.confirm_hosting,
+              approved_queue=args.approve_existing_queue)
     else:
         print(
             "PLAN ONLY: no cloud commands executed. Deployment needs authenticated project access and explicit resource approval."
