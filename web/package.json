@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "name": "lastrada-firebase-web",
+  "scripts": {
+    "test": "node ../tests/browser/firebase.cjs"
+  },
+  "devDependencies": {
+    "playwright": "1.57.0"
+  }
+}

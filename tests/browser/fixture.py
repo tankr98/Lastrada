@@ -1,0 +1,50 @@
+"""Generated case for the browser contract test; no client recordings or models."""
+
+import json
+import sys
+from lastrada.schemas.models import Analysis, Intake, Work, Interval
+from lastrada.reporting.suggestions import suggested_intervals, placement_proposal
+from lastrada.web.domain import ReviewPayload, apply_review
+from lastrada.reporting.document import document_html, document_text
+
+
+def initial():
+    intake = Intake(
+        case_id="00000000-0000-4000-8000-000000000001",
+        original_work=Work(title="Source", artist="Artist"),
+        new_work=Work(title="New", artist="Artist"),
+        analysis_scope=["master", "publishing"],
+    )
+    analysis = Analysis(case_id=intake.case_id, input=intake, durations={"original": 20, "new": 20})
+    analysis.master.locate.measurement_intervals = [
+        Interval(new_start=1, new_end=4, source="pfnmf")
+    ]
+    return {
+        "analysis": analysis.model_dump(mode="json"),
+        "suggestions": {
+            r: {
+                "intervals": [i.model_dump(mode="json") for i in suggested_intervals(analysis, r)],
+                "placement": placement_proposal(suggested_intervals(analysis, r), 20).__dict__,
+            }
+            for r in intake.analysis_scope
+        },
+    }
+
+
+if __name__ == "__main__":
+    mode = sys.argv[1]
+    if mode == "initial":
+        print(json.dumps(initial()))
+    else:
+        body = json.load(sys.stdin)
+        analysis = Analysis.model_validate(body["analysis"])
+        if mode == "review":
+            print(
+                apply_review(
+                    analysis, ReviewPayload.model_validate(body["payload"])
+                ).model_dump_json()
+            )
+        elif mode == "html":
+            print(document_html(analysis))
+        else:
+            print(document_text(analysis))

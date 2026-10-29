@@ -82,3 +82,11 @@ time. Complete probe results are reused in the session and separated audio is
 cached on disk; a cache hit does not restore an older review. The extra probe
 never replaces the complete main-analysis timestamps. Sony/full-mix DTW evidence
 and final review requirements remain unchanged.
+
+### Firebase web application
+
+A separate Firebase Hosting interface and private queued Cloud Run analysis
+worker are prepared on `feat/firebase-web`. This path removes the Streamlit
+runtime, requires Google sign-in, saves analysis results, and runs optional stem
+checks only on request. See the [deployment guide](docs/FIREBASE_DEPLOYMENT.md)
+for the resource plan, authenticated deployment steps and verification limits.
