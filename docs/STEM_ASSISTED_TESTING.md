@@ -17,8 +17,9 @@ For one Sony or manually supplied candidate interval:
 6. rank accepted stem-pair alignments by label agreement and DTW cost;
 7. let the reviewer listen to the strongest estimated source and derivative stems.
 
-The default six-source model produces estimated `vocals`, `drums`, `bass`,
-`guitar`, `piano`, and `other` stems. These are not recovered studio multitracks.
+The main app uses the four-source `htdemucs` model for estimated `vocals`,
+`drums`, `bass`, and `other` stems. The laboratory can still explicitly select
+`htdemucs_6s` for guitar and piano. These are not recovered studio multitracks.
 Bleed, artifacts and incorrect stem assignment are expected.
 
 ## Windows setup
@@ -101,3 +102,22 @@ package compatibility and pip's production-requirements resolution passed; all
 model download but was blocked by this workspace's network proxy (403 on both
 the Hugging Face route and legacy provider fallback). Successful pretrained
 separation and the Streamlit rebuild have not been verified.
+
+## Lightweight main-app behavior
+
+Demucs is no longer part of the initial analysis, including when an environment
+setting enables stems for laboratory use. The main app forces that stage off
+and offers an explicit **Explore instruments** button after timestamps appear.
+The requested probe examines one highest-similarity paired candidate, clips
+both songs' candidate spans to eight seconds, adds one-second context margins,
+and uses the four-stem model. Four-second processing segments, one-thread CPU
+workers, a 180-second subprocess timeout and one in-process concurrent heavy request (including main analysis)
+bound the work. Successful results are reused; full candidate timing and saved
+review payloads are not replaced by a shortened probe.
+
+The configured comparison budget changed from 50 paired regions to one;
+ordinary runs now make zero stem requests. These are verified call-count and
+crop-size limits, not measured hosted CPU or memory savings. Pretrained Demucs
+inference remains unverified in this workspace because model downloads are
+blocked by its network proxy. Streamlit resource use must be checked after its
+rebuild. Laboratory callers may still explicitly configure multiple candidates.

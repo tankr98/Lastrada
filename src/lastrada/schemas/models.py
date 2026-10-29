@@ -16,6 +16,10 @@ class Placement(StrEnum):
     INTRO_OUTRO = "intro_outro_without_chorus"
     VERSES = "verses"
     ONE_TIME = "one_time"
+    INTRO = "intro_only"
+    OUTRO = "outro_only"
+    BRIDGE = "bridge_only"
+    SELECTED = "selected_sections"
 
 
 PLACEMENT_CLASSES = [p.value for p in Placement]
