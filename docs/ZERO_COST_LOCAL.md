@@ -19,6 +19,23 @@ needs filesystem storage, local upload handling, a bounded local job runner,
 loopback-only access, and frontend authentication/configuration changes. That
 work has not been implemented. Do not deploy a static shell as a working analyzer.
 
+## Simple launcher
+
+After downloading/cloning this branch and installing Python 3.12:
+
+- Windows: double-click `Start-Lastrada.cmd`.
+- macOS: open `Start-Lastrada.command`. If macOS will not execute the file, open
+  Terminal in the checkout and run `bash Start-Lastrada.command`.
+- Any platform: run `python3.12 run-local.py` (Windows: `py -3.12 run-local.py`).
+
+The launcher creates the checkout's `.venv` if missing, installs the local UI
+when its dependencies are missing, prints model/fallback warnings, and binds to
+`127.0.0.1`. First setup needs internet for Python packages; it does not download
+models or enable cloud services. Python itself must already be installed.
+`--check` checks readiness without installing or launching; `--setup` refreshes
+app dependencies. Close with Ctrl+C. Use `--port 8502` if 8501 is occupied.
+The Windows wrapper has not been executed on Windows in this workspace.
+
 ## Existing local UI: Linux/macOS commands
 
 Install Python 3.12 and FFmpeg using your operating system's normal tools. From
