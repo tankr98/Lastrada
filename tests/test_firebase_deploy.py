@@ -143,3 +143,24 @@ def test_firebase_app_selection_rejects_another_projects_app(monkeypatch):
         {"result": [{"platform": "WEB", "appId": "different-app"}]}))
     with pytest.raises(SystemExit, match="does not belong"):
         module.select_firebase_target("project", "requested-app", "site", "project/site")
+
+
+def test_missing_cloud_run_service_is_absent_but_denials_still_stop(monkeypatch):
+    import pytest
+
+    module = bootstrap()
+    command = ("gcloud", "run", "services", "describe", "lastrada-api")
+    def response(message):
+        monkeypatch.setattr(module.subprocess, "run", lambda *a, **k:
+                            subprocess.CompletedProcess(a, 1, "", message))
+    response("ERROR: (gcloud.run.services.describe) Cannot find service [lastrada-api]")
+    assert module.exists(*command) is False
+    response("PERMISSION_DENIED: Cannot find service [lastrada-api]")
+    with pytest.raises(SystemExit):
+        module.exists(*command)
+    response("SERVICE_DISABLED: Cloud Run API is disabled")
+    with pytest.raises(SystemExit):
+        module.exists(*command)
+    response("Cannot find service [another-service]")
+    with pytest.raises(SystemExit):
+        module.exists(*command)

@@ -46,7 +46,13 @@ def exists(*command):
     if result.returncode == 0:
         return True
     reason = result.stderr.lower()
-    if any(marker in reason for marker in ("not_found", "not found", "does not exist", "404")):
+    missing_run_service = (
+        command[:4] == ("gcloud", "run", "services", "describe")
+        and len(command) > 4
+        and f"cannot find service [{command[4].lower()}]" in reason
+        and not any(x in reason for x in ("permission_denied", "permission denied", "service_disabled"))
+    )
+    if missing_run_service or any(marker in reason for marker in ("not_found", "not found", "does not exist", "404")):
         return False
     raise SystemExit(
         "Could not inspect the target resource. Resolve the CLI/access error before retrying: "
