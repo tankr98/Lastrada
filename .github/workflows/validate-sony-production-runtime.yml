@@ -1,0 +1,37 @@
+name: Validate Sony production runtime
+
+on:
+  push:
+    branches: [feat/sony-dtw-main-flow]
+    paths:
+      - requirements.txt
+      - src/lastrada/recognition/sampleid_adapter.py
+      - .github/workflows/validate-sony-production-runtime.yml
+
+jobs:
+  runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Streamlit production requirements
+        run: python -m pip install -r requirements.txt
+      - name: Verify Sony source layout and CPU runtime
+        run: |
+          python - <<'PY'
+          import torch
+          import sampleid
+          from lastrada.recognition.sampleid_adapter import (
+              _prepare_sampleid_model_imports,
+          )
+
+          SampleID = _prepare_sampleid_model_imports()
+          assert SampleID is not None
+          import src.networks.resnet_ibn
+
+          print('torch:', torch.__version__)
+          print('sampleid:', sampleid.__file__)
+          print('src.networks.resnet_ibn: OK')
+          PY

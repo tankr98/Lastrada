@@ -1,0 +1,11 @@
+# Open questions
+
+1. **Measurement vs interpolation controls.** The methodology warns PF-NMF is not a detector, while evaluation expects master negatives on interpolation controls. v0 separates measurement from detection and does not mark strong activation as verified reuse. Confirm the independent verification protocol and expert adjudication rules.
+2. **Placement truth.** Rule-derived classes are not expert-confirmed ground truth. Confirm all reserved labels before scoring; low/blank rule labels remain unreliable. Agree how an interpolation's publishing placement is scored when master detection correctly returns no candidates.
+3. **Reference assets.** Client measurement code/findings, referenced research papers, the additional project deck and actual paired audio were not included in the supplied bundle. Request these through approved team storage, rather than downloading commercial recordings from YouTube.
+4. **Audio versions.** Establish which supplied/reference version the expert timed. Validate timestamps and version mismatches before scoring; shortened references need alignment, not invented endpoints.
+5. **Publishing methods.** Automatic replayed melody, re-sung lyric and structural segmentation are not solved by recording similarity. Decide which component should be developed next and which remains reviewer-only.
+6. **Novelty and prominence.** Residual energy is not a calibrated musical novelty measure. These remain exploratory; popularity, rates and commercial metadata are deferred.
+7. **Output/review rubric.** Confirm how substantive correctness is judged across element, placement, extent, method and role; which corrections count as minor; and when unresolved evidence permits a final deliverable.
+8. **Model prerequisites.** Zenodo access, authoritative checksum verification and generated-audio CPU inference were established in the build environment. Real-recording accuracy and transformations still require evaluation. Future tasks must retain the optional package, source and checkpoint or reproduce setup; no accuracy claim follows from a self-match test.
+9. **Production ownership.** Persistence, permissions, retention, deployment and ongoing maintenance require decisions beyond this local prototype. No confidential assets should be committed without explicit client permission, even if repository visibility changes.
