@@ -13,6 +13,10 @@ public Streamlit service and a larger resource allocation.
 
 ## Current evidence update
 
+See [ANALYSIS_LATENCY.md](ANALYSIS_LATENCY.md) for Demucs model reuse, earlier
+supported results, controlled performance measurements and draft/export wording
+that follows the creator's current answers.
+
 See [SAMPLE_DESCRIPTION_FLOW.md](SAMPLE_DESCRIPTION_FLOW.md) for the prefilled
 recording-sample workflow, removed timestamp/replay confirmation steps, and
 the distinction between estimated timings and a confirmed description.

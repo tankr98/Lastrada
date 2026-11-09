@@ -1,6 +1,7 @@
 """Bounded per-occurrence stem checks; suggestions never replace human review."""
 
 import hashlib
+from contextlib import ExitStack
 import json
 import os
 from pathlib import Path
@@ -123,6 +124,18 @@ def run_occurrence_instruments(
     budget_seconds=600,
     max_new_checks=50,
 ):
+    with ExitStack() as cleanup:
+        return _run_occurrence_instruments(
+            result, original, new, settings, separator=separator,
+            on_progress=on_progress, budget_seconds=budget_seconds,
+            max_new_checks=max_new_checks, cleanup=cleanup,
+        )
+
+
+def _run_occurrence_instruments(
+    result, original, new, settings, *, separator, on_progress,
+    budget_seconds, max_new_checks, cleanup,
+):
     """Check bounded probes in every eligible row, saving partial work for continuation.
 
     At most 10 minutes / 50 new comparisons per request. Cached completed rows are
@@ -157,7 +170,10 @@ def run_occurrence_instruments(
                     cache_dir=Path(os.getenv("LASTRADA_CACHE_DIR", "cache")) / "demucs",
                     segment_seconds=4,
                     timeout_seconds=settings.stem_timeout_seconds,
+                    reuse_model=settings.stem_reuse_model,
+                    workers=2 if settings.stem_device == "cpu" else 1,
                 )
+                cleanup.callback(getattr(separator, "close", lambda: None))
             except (StemSeparationUnavailable, OSError, RuntimeError, ValueError) as exc:
                 row.status, row.reason = "failed", str(exc)
                 persist()

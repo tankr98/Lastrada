@@ -31,6 +31,7 @@ function python(mode, body) {
     requests = 0,
     instrumentRequests = 0,
     instrumentPolls = 0,
+    mainPolls = 0,
     operation = "analyze",
     jobError = null;
   const instrumentScenario = process.env.LASTRADA_BROWSER_STEMS;
@@ -195,7 +196,7 @@ function python(mode, body) {
           },
         };
       } else if (u.pathname.endsWith("/run")) {
-        job = "completed";
+        job = sampleScenario?.startsWith("early_") ? "running" : "completed";
         result = { status: job };
       } else if (u.pathname.endsWith("/stems")) {
         instrumentRequests++;
@@ -231,6 +232,9 @@ function python(mode, body) {
         result = data;
       }
       else if (u.pathname.endsWith("/review")) {
+        if (sampleScenario?.startsWith("early_") && job !== "completed") {
+          throw Error("Description save raced with initial analysis");
+        }
         try {
           data.analysis = JSON.parse(
             python("review", {
@@ -342,6 +346,23 @@ function python(mode, body) {
           }
         }
         result = { id, status: job, operation, error: jobError };
+        if (sampleScenario?.startsWith("early_") && operation === "analyze" && job !== "completed") {
+          mainPolls++;
+          if (sampleScenario === "early_failure" && mainPolls >= 3) {
+            job = "failed";
+            result.error = "The analysis worker stopped before checks finished.";
+          } else if (mainPolls >= 4) {
+            job = "completed";
+            data.instrument_rows[0].status = "checked";
+            data.instrument_rows[0].suggested_instruments = ["Bass"];
+            data.analysis.instrument_occurrences = data.instrument_rows;
+            const extra = { ...data.analysis.master.locate.sample_occurrences[0],
+              new_start: 14, new_end: 16, original_start: 10, original_end: 12,
+              source: "stem-assisted DTW · bass → bass", end_review: null, ending_review_context: null };
+            data.analysis.master.locate.sample_occurrences.push(extra);
+          }
+          result = { ...result, status: job, result_ready: true, result_version: mainPolls };
+        }
       }
       return route.fulfill({ status, headers, json: result });
     });
@@ -840,6 +861,13 @@ function python(mode, body) {
       requests,
       instrumentScenario || endingScenario || "base",
     );
+  } catch (error) {
+    console.error({ job, operation, mainPolls, review: data.analysis.review.status });
+    for (const context of b.contexts()) for (const page of context.pages()) {
+      console.error(await page.locator('[role="alert"]').allTextContents());
+      console.error(await page.locator('h1').allTextContents());
+    }
+    throw error;
   } finally {
     await b.close();
     await new Promise((r) => server.close(r));

@@ -11,6 +11,7 @@ def analysis_settings():
 
     return Settings(
         stem_enabled=True,
+        stem_reuse_model=True,
         stem_model_name=PROFILE["stem_model"],
         stem_max_candidates=PROFILE["initial_stem_candidates"],
         stem_separation_padding_seconds=4,

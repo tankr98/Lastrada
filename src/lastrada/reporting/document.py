@@ -3,6 +3,7 @@
 from html import escape
 from lastrada.schemas.models import Analysis, PathResult
 from lastrada.reporting.sample_flow import automatic_path
+from lastrada.reporting.placement import PLACEMENT_TEXT
 
 RIGHTS_NAMES = {
     "master": "Recording sample (master)",
@@ -82,6 +83,8 @@ def document_text(analysis: Analysis):
                 if automatic and any(i.end_review for i in path.locate.sample_occurrences):
                     lines.append("Some endings are uncertain and may extend beyond the estimated times.")
             else:
+                if path.classification.placement:
+                    lines.append("Placement: " + PLACEMENT_TEXT[path.classification.placement])
                 for occurrence in path.locate.sample_occurrences:
                     approximate = "≈ " if automatic and occurrence.end_review else ""
                     lines.append(
@@ -170,9 +173,9 @@ def creator_narrative(analysis):
         parts.append(f"The new track uses {element} from {name}.")
         if path.describe.reuse_type:
             parts.append(f"How it is used: {path.describe.reuse_type}.")
-        if path.classification.placement == "throughout":
-            parts.append("It can be heard throughout the track.")
-        elif path.locate.sample_occurrences:
+        if path.classification.placement:
+            parts.append("It can be heard " + PLACEMENT_TEXT[path.classification.placement] + ".")
+        if path.classification.placement != "throughout" and path.locate.sample_occurrences:
             ranges = ", ".join(
                 f"{timestamp(i.new_start)}–{timestamp(i.new_end)}"
                 for i in path.locate.sample_occurrences
@@ -190,4 +193,9 @@ def creator_narrative(analysis):
             parts.append(f"Repetition: {path.describe.repetition}.")
         if path.describe.role_in_new_song:
             parts.append(f"Its role in the track: {path.describe.role_in_new_song}.")
+        lyrics = next((str(f.value) for f in path.describe.elements
+                       if f.feature == "lyrics" and f.value), None)
+        if lyrics:
+            parts.append(f"Reused lyrics: {lyrics}")
+        parts.extend(path.describe.limitations)
     return " ".join(parts)

@@ -82,9 +82,15 @@ def create_app(cases=None, queue=None, authenticate_user=None, mode=None):
 
     def result_at(root):
         from lastrada.schemas.models import Analysis
+        from pydantic import ValidationError
 
         value, _ = repo().read(root + "/result.json")
-        return Analysis.model_validate(value)
+        try:
+            return Analysis.model_validate(value)
+        except ValidationError as error:
+            if any(item["type"] == "extra_forbidden" for item in error.errors()):
+                raise HTTPException(409, "This saved analysis uses a format this analysis service cannot read. Ask the app owner to check that the API and worker are on the same version.") from None
+            raise HTTPException(409, "This saved analysis could not be read. Ask the app owner to investigate this case before trying again.") from None
 
     @app.exception_handler(ValueError)
     async def invalid(_request, exc):
@@ -210,7 +216,8 @@ def create_app(cases=None, queue=None, authenticate_user=None, mode=None):
             for role in ("original", "new"):
                 repo().validate_upload(root + f"/{role}", state["uploads"][role]["size"])
         task_id = f"{analysis_id}-{operation}-{uuid4().hex[:8]}"
-        state.update(status="queued", operation=operation, task_id=task_id, error=None)
+        state.update(status="queued", operation=operation, task_id=task_id, error=None,
+                     result_ready=False, result_version=0)
         try:
             repo().write(root + "/case.json", state, generation)
         except PreconditionFailed:
@@ -243,12 +250,16 @@ def create_app(cases=None, queue=None, authenticate_user=None, mode=None):
             "operation": state["operation"],
             "error": state.get("error"),
             "instrument_progress": state.get("instrument_progress"),
+            "result_ready": state.get("result_ready", False),
+            "result_version": state.get("result_version", 0),
         }
 
     @app.get("/api/analyses/{analysis_id}/result")
     def result(analysis_id: UUID, request: Request):
         root, state, _ = read_case(request, analysis_id)
-        if state["status"] != "completed":
+        if state["status"] != "completed" and not (
+            state["status"] == "running" and state.get("result_ready")
+        ):
             raise HTTPException(409, "Analysis is not ready")
         value = result_at(root)
         from lastrada.reporting.suggestions import suggested_intervals, placement_proposal

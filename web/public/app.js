@@ -46,6 +46,7 @@ let config,
   instrumentMessage = "",
   instrumentError = "";
 let sampleFlow = true, sampleSuggestion = null;
+let analysisPending = false, analysisError = "", touchedPlacement = false;
 const titles = [
   "Your tracks",
   "Finding your sample",
@@ -67,6 +68,12 @@ const placements = {
   selected_sections: "Selected sections",
   one_time: "One appearance",
 };
+const placementSections = {
+  throughout: ["whole track"], intro_only: ["intro"], outro_only: ["outro"],
+  intro_outro_with_chorus: ["intro", "chorus", "outro"],
+  intro_outro_without_chorus: ["intro", "outro"], chorus_only: ["chorus"],
+  verses: ["verse"], bridge_only: ["bridge"],
+};
 function notice(message) {
   $("#notice").textContent = message;
   $("#notice").hidden = !message;
@@ -82,7 +89,9 @@ function frame(content) {
     step < 0
       ? ""
       : `STEP ${visibleStep + 1} OF ${visibleTitles.length} · ${visibleTitles[visibleStep]}<div class="bar"><span style="width:${((visibleStep + 1) / visibleTitles.length) * 100}%"></span></div>`;
-  $("#view").innerHTML = content;
+  $("#view").innerHTML = (analysisPending
+    ? '<p id="analysisProgress" role="status">Sample found. Instrument details are still being checked; you can start reviewing the description.</p>'
+    : "") + content;
   window.scrollTo({ top: 0, behavior: "instant" });
 }
 function field(label, key, value = "", placeholder = "") {
@@ -128,6 +137,9 @@ async function json(path, options) {
   return (await api(path, options)).json();
 }
 function reset() {
+  analysisPending = false;
+  analysisError = "";
+  touchedPlacement = false;
   sampleFlow = true;
   sampleSuggestion = null;
   polling++;
@@ -253,6 +265,12 @@ function render() {
     frame(
       `<h1>Make it yours.</h1><p class="muted">Read the draft, make any edits, then mark it as reviewed.</p><label>Edit your Nature of Use draft<textarea data-global="narrative" rows="9">${esc(narrative)}</textarea></label>${field("Your name / reviewer", "reviewer", reviewer)}<label>Anything still to check? (optional)<textarea data-global="notes">${esc(notes)}</textarea></label><div class="actions">${button("Save draft", "save")}${button("Mark document as reviewed", "approve", true)}</div>${approved ? "<p>Reviewed and ready to download.</p>" : ""}${nav("Next: Your Nature of Use →")}`,
     );
+    if (analysis.review.previous_narrative) {
+      const previous = document.createElement("details");
+      previous.innerHTML = '<summary>Earlier draft wording</summary><p>The draft was updated to match your current answers. Your earlier wording is kept here.</p><pre class="document"></pre>';
+      previous.querySelector("pre").textContent = analysis.review.previous_narrative;
+      $("#view").append(previous);
+    }
     return;
   }
   frame(
@@ -260,11 +278,14 @@ function render() {
   );
 }
 function sampleEvidence() {
-  const f = forms.master;
   return `<details id="sampleEvidence"><summary>Sample matches and instruments</summary><p class="muted">Automatically located matches. Times remain estimates; uncertain endings are marked ≈.</p>
     <div class="grid"><div><h3>The original</h3><audio controls id="originalPlayer"></audio></div><div><h3>Your track</h3><audio controls id="newPlayer"></audio></div></div>
-    <div class="track" data-rights="master"><div class="tableWrap"><table><thead><tr><th>Your track start</th><th>Your track end</th><th>Original start</th><th>Original end</th></tr></thead><tbody>${f.intervals.map((i, n) => `<tr>${["new_start", "new_end", "original_start", "original_end"].map(key => renderTimeCell(i, key, n, f)).join("")}</tr>`).join("")}</tbody></table></div>
+    <div class="track" data-rights="master">${sampleTimeTable()}
     <section id="instruments" aria-label="Instrument check">${renderInstruments()}</section></div></details>`;
+}
+function sampleTimeTable() {
+  const f = forms.master;
+  return `<div class="tableWrap" data-sample-times><table><thead><tr><th>Your track start</th><th>Your track end</th><th>Original start</th><th>Original end</th></tr></thead><tbody>${f.intervals.map((i, n) => `<tr>${["new_start", "new_end", "original_start", "original_end"].map(key => renderTimeCell(i, key, n, f)).join("")}</tr>`).join("")}</tbody></table></div>`;
 }
 function renderLoopGroups() {
   if (!loopFamilies.length) return "";
@@ -429,6 +450,7 @@ function updateInstruments() {
   });
 }
 async function startInstrumentCheck() {
+  if (analysisPending) return;
   if (instrumentBusy) return;
   const target = caseId;
   const serial = ++polling;
@@ -571,19 +593,42 @@ async function analyze() {
 async function poll({ instruments = false } = {}) {
   const serial = ++polling;
   let errors = 0;
+  let previewShown = false, previewVersion = -1;
   while (serial === polling && user) {
     try {
       const state = await json(`/api/analyses/${caseId}`);
       if (serial !== polling) return;
+      if (!instruments && state.status === "running" && state.result_ready &&
+          state.result_version !== previewVersion) {
+        if (!(await loadResult({ preserveReview: previewShown, expectedPoll: serial }))) return;
+        if (sampleSuggestion?.status === "identified") {
+          analysisPending = true;
+          instrumentBusy = true;
+          instrumentMessage = "Finishing the initial instrument comparisons…";
+          if (!previewShown) { step = 3; render(); }
+          else updateInstruments();
+          previewShown = true;
+          previewVersion = state.result_version;
+        }
+      }
       if (state.status === "completed") {
         if (
           !(await loadResult({
-            preserveReview: instruments,
+            preserveReview: instruments || previewShown,
             expectedPoll: serial,
           }))
         )
           return;
         if (serial !== polling) return;
+        analysisPending = false;
+        analysisError = "";
+        $("#analysisProgress")?.remove();
+        if (previewShown) {
+          instrumentBusy = false;
+          instrumentMessage = "";
+          updateInstruments();
+          return;
+        }
         if (instruments || state.operation === "stems") {
           instrumentBusy = false;
           instrumentError = state.error || "";
@@ -624,6 +669,11 @@ async function poll({ instruments = false } = {}) {
       errors = 0;
     } catch (e) {
       if (e.terminal || ++errors >= 5) {
+        if (previewShown) {
+          analysisError = e.terminal ? e.message : "Connection lost. Your unsaved edits are still on this page; copy them before reloading to reconnect.";
+          if ($("#analysisProgress")) $("#analysisProgress").textContent = analysisError;
+          notice(analysisError);
+        }
         if (instruments) {
           instrumentBusy = false;
           instrumentError = e.terminal
@@ -721,8 +771,24 @@ async function loadResult({
     }
   }
   applyInstrumentPrefill();
+  if (sampleFlow && preserveReview && forms.master) {
+    const changedTimes = JSON.stringify(forms.master.intervals) !== JSON.stringify(sampleSuggestion.intervals);
+    forms.master.intervals = sampleSuggestion.intervals;
+    const table = $('[data-sample-times]');
+    if (changedTimes && table) table.outerHTML = sampleTimeTable();
+    if (!touchedPlacement && !forms.master.details_confirmed) {
+      forms.master.sections = sampleSuggestion.placement.values.sections || [];
+      forms.master.placement = sampleSuggestion.placement.values.placement || null;
+      document.querySelectorAll("[data-section]").forEach(input => {
+        input.checked = forms.master.sections.includes(input.dataset.section);
+      });
+      const placement = $('[data-field="placement"]');
+      if (placement) placement.value = forms.master.placement || "";
+    }
+  }
   if (corrected && !preserveReview) {
     narrative = corrected.nature_of_use.text;
+    generated = analysis.review.generated_narrative || "";
     reviewer = analysis.review.reviewer || user.displayName || "";
     notes = analysis.review.notes || "";
     approved = analysis.review.status === "approved";
@@ -819,9 +885,10 @@ async function save(approve = false) {
   const target = caseId;
   if (sampleFlow && instrumentBusy) {
     notice("Your answers are kept. Finishing the instrument check before saving your draft…");
-    while (instrumentBusy && target === caseId && user)
+    while (instrumentBusy && target === caseId && user && !analysisError)
       await new Promise(resolve => setTimeout(resolve, 250));
     if (target !== caseId || !user) return false;
+    if (analysisError) throw Error(analysisError);
     notice("");
   }
   const serial = polling;
@@ -871,7 +938,13 @@ async function save(approve = false) {
   if (target !== caseId || serial !== polling) return false;
   analysis = value.analysis;
   narrative = analysis.review.corrected.nature_of_use.text;
-  if (!payload.narrative) generated = narrative;
+  generated = analysis.review.generated_narrative || (!payload.narrative ? narrative : generated);
+  for (const [rights, form] of Object.entries(forms)) {
+    const path = analysis.review.corrected[rights];
+    form.sections = path.describe.sections;
+    form.placement = path.classification.placement;
+    form.repetition = path.describe.repetition || "";
+  }
   approved = analysis.review.status === "approved";
   return true;
 }
@@ -947,6 +1020,19 @@ $("#view").addEventListener("change", (e) => {
     forms[r].details_confirmed = el.value === "no_use";
     render();
   }
+  if (r && el.dataset.field === "placement") {
+    const form = forms[r];
+    form.placement = el.value;
+    form.sections = placementSections[el.value] ? [...placementSections[el.value]]
+      : form.sections.filter(s => s !== "whole track");
+    if (!form.sections.length) form.sections = ["matched passages"];
+    if (el.value !== "throughout" && form.repetition === "Repeated throughout the track")
+      form.repetition = "Repeated in the selected sections";
+    form.details_confirmed = false;
+    touchedPlacement = true;
+    approved = false;
+    render();
+  }
   if (el.dataset.times) {
     const f = forms[el.dataset.times];
     f.edit = el.value === "edit";
@@ -955,6 +1041,8 @@ $("#view").addEventListener("change", (e) => {
     render();
   }
   if (r && el.dataset.section) {
+    touchedPlacement = true;
+    approved = false;
     forms[r].sections = [
       ...el.closest(".checks").querySelectorAll("input:checked"),
     ].map((x) => x.dataset.section);

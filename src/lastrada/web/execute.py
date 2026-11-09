@@ -108,7 +108,19 @@ def execute(owner, analysis_id, operation, task_id):
                 )
             except Exception:
                 warning = "Sony matching is unavailable; displayed times are PF-NMF fallback estimates. Original-track positions may be unknown."
-            result = analyze_pair(intake, original, new, adapter=adapter, settings=settings)
+
+            def publish_ready(partial):
+                current, revision = repo.read(root + "/case.json")
+                if current.get("task_id") != task_id:
+                    return
+                partial.methods["web_profile"] = PROFILE["name"]
+                repo.write(root + "/result.json", partial.model_dump(mode="json"))
+                current.update(result_ready=True, result_version=current.get("result_version", 0) + 1)
+                current.setdefault("first_result_at", time.time())
+                repo.write(root + "/case.json", current, revision)
+
+            result = analyze_pair(intake, original, new, adapter=adapter, settings=settings,
+                                  on_result=publish_ready)
             adapter = None
             result.methods["web_profile"] = PROFILE["name"]
             if warning:

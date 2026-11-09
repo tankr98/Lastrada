@@ -11,6 +11,17 @@ module.exports = async (page, data, scenario, errors) => {
     return;
   }
   await page.getByRole("heading", { name: "Does this describe your sample?" }).waitFor();
+  if (scenario.startsWith("early_")) {
+    await page.getByText(/Sample found\. Instrument details are still being checked/).waitFor();
+    assert.strictEqual(data.analysis.review.corrected, null);
+    if (scenario === "early_reset") {
+      await page.locator("#newSample").click();
+      await page.waitForTimeout(4500);
+      await page.getByRole("heading", { name: "Start with the music." }).waitFor();
+      assert.strictEqual(await page.locator("#analysisProgress").count(), 0);
+      return;
+    }
+  }
   assert((await page.locator("#progress").innerText()).includes("STEP 3 OF 6"));
   assert.strictEqual(await page.locator("[data-times], [data-field=times_confirmed], [data-field=status]").count(), 0);
   assert.strictEqual(await page.locator('[data-rights="publishing"]').count(), 0);
@@ -21,7 +32,7 @@ module.exports = async (page, data, scenario, errors) => {
   assert((await element.inputValue()).includes(scenario === "prefilled" ? "Guitar" : "instrument not identified"));
   assert((await page.getByLabel("Any reused lyrics? (optional)").inputValue()).includes("Not assessed"));
   const role = page.getByLabel("What does it do in your track?", { exact: true });
-  if (scenario === "reload_edits" || scenario.startsWith("automatic")) {
+  if (scenario === "reload_edits" || scenario.startsWith("automatic") || scenario === "early_result") {
     await element.fill("My edited sound");
     await role.fill("My main hook");
     await page.getByLabel("Any reused lyrics? (optional)").fill("");
@@ -56,13 +67,26 @@ module.exports = async (page, data, scenario, errors) => {
   assert.strictEqual(await element.inputValue(), savedElement);
   await page.getByRole("button", { name: "Confirm description & continue →" }).click();
   await page.getByRole("button", { name: "Confirm placement & review draft →" }).click();
-  if (scenario === "automatic_confirm")
+  if (scenario === "early_failure") {
+    await page.locator("#notice").getByText("The analysis worker stopped before checks finished.").waitFor({ timeout: 60000 });
+    assert.strictEqual(data.analysis.review.corrected, null);
+    assert(await page.getByRole("button", { name: "Confirm placement & review draft →" }).isEnabled());
+    assert.strictEqual(await page.getByRole("heading", { name: "Make it yours." }).count(), 0);
+    return;
+  }
+  if (scenario === "automatic_confirm" || scenario === "early_result")
     await page.getByText(/Your answers are kept\. Finishing the instrument check/).waitFor();
-  await page.getByRole("heading", { name: "Make it yours." }).waitFor();
+  await page.getByRole("heading", { name: "Make it yours." }).waitFor({
+    // Background tabs poll every 15 seconds; allow the four-state initial job
+    // to finish on loaded CI machines without weakening the assertions.
+    timeout: scenario === "early_result" ? 60000 : 30000,
+  });
   assert.strictEqual(data.analysis.review.workflow, "sample");
   assert.strictEqual(data.analysis.review.corrected.master.locate.detection_status, "candidate");
   assert.strictEqual(data.analysis.review.corrected.master.locate.timing_source, "automated");
   assert(data.analysis.review.corrected.master.locate.sample_occurrences[0].end_review);
+  if (scenario === "early_result")
+    assert.strictEqual(data.analysis.review.corrected.master.locate.sample_occurrences.length, 2);
   await page.getByRole("button", { name: "Mark document as reviewed", exact: true }).click();
   await page.getByText("Reviewed and ready to download.", { exact: true }).first().waitFor();
   await page.getByRole("button", { name: "Next: Your Nature of Use →" }).click();
@@ -75,9 +99,32 @@ module.exports = async (page, data, scenario, errors) => {
   await page.reload();
   await page.getByRole("heading", { name: "Does this describe your sample?" }).waitFor();
   assert.strictEqual(await element.inputValue(), savedElement);
-  if (scenario === "reload_edits" || scenario.startsWith("automatic")) {
+  if (scenario === "reload_edits" || scenario.startsWith("automatic") || scenario === "early_result") {
     assert.strictEqual(await role.inputValue(), "My main hook");
     assert.strictEqual(await page.getByLabel("Any reused lyrics? (optional)").inputValue(), "");
+  }
+  if (scenario === "placement_edit") {
+    await page.getByRole("button", { name: "Confirm description & continue →" }).click();
+    await page.getByLabel("Where does it appear overall?").selectOption("throughout");
+    await page.getByRole("button", { name: "Confirm placement & review draft →" }).click();
+    assert((await page.getByLabel("Edit your Nature of Use draft").inputValue()).includes("throughout the track"));
+    await page.reload();
+    await page.getByRole("button", { name: "Confirm description & continue →" }).click();
+    await page.getByLabel("Where does it appear overall?").selectOption("intro_outro_without_chorus");
+    assert(await page.getByLabel("intro", { exact: true }).isChecked());
+    assert(await page.getByLabel("outro", { exact: true }).isChecked());
+    assert(!(await page.getByLabel("whole track", { exact: true }).isChecked()));
+    await page.getByRole("button", { name: "Confirm placement & review draft →" }).click();
+    const draft = await page.getByLabel("Edit your Nature of Use draft").inputValue();
+    assert(draft.includes("in the intro and outro") && !draft.includes("throughout the track"));
+    await page.getByRole("button", { name: "Mark document as reviewed", exact: true }).click();
+    await page.getByText("Reviewed and ready to download.", { exact: true }).first().waitFor();
+    await page.getByRole("button", { name: "Next: Your Nature of Use →" }).click();
+    assert((await page.locator("article.document").innerText()).includes("in the intro and outro"));
+    const exported = page.waitForEvent("download");
+    await page.getByRole("button", { name: "Download HTML", exact: true }).click();
+    const document = fs.readFileSync(await (await exported).path(), "utf8");
+    assert(document.includes("in the intro and outro") && !document.includes("throughout the track"));
   }
   await page.setViewportSize({ width: 700, height: 1000 });
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 2));

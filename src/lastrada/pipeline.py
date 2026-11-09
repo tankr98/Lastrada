@@ -81,7 +81,7 @@ def _should_run_recording_evidence(intake, adapter, settings):
     return "master" in intake.analysis_scope or adapter is not None or settings.stem_enabled
 
 
-def stem_assist_candidates(original, new, candidates, separator, settings):
+def stem_assist_candidates(original, new, candidates, separator, settings, on_progress=None):
     """Run Demucs + guarded DTW on the strongest paired candidates.
 
     Stem evidence is a second-stage validation layer. It only replaces the
@@ -117,8 +117,13 @@ def stem_assist_candidates(original, new, candidates, separator, settings):
         comparison.partial = probe_is_partial(probe, candidate)
         comparisons.append(comparison)
 
+        def publish_progress():
+            if on_progress:
+                on_progress(updated, comparisons)
+
         best = _best_separated_stem_evidence(comparison)
         if best is None:
+            publish_progress()
             continue
 
         # Do not displace a stronger full-mix refinement. Stem evidence is used
@@ -128,6 +133,7 @@ def stem_assist_candidates(original, new, candidates, separator, settings):
             "sampleid_rank_sequence",
             "sampleid_chunk_cosine",
         }:
+            publish_progress()
             continue
 
         updated[index] = Interval(
@@ -139,11 +145,25 @@ def stem_assist_candidates(original, new, candidates, separator, settings):
             status="candidate",
             similarity=candidate.similarity,
         )
+        publish_progress()
 
     return updated, comparisons
 
 
-def _run_optional_stem_assistance(result, original, new, candidates, settings):
+def _record_completed_stems(result, candidates, updated, comparisons, settings):
+    if not comparisons:
+        return
+    from lastrada.separation.occurrences import record_initial_comparisons
+    indices = [i for i, c in enumerate(candidates[:settings.stem_max_candidates])
+               if c.original_start is not None and c.original_end is not None]
+    checked_settings = settings.model_copy(update={
+        "stem_max_candidates": indices[len(comparisons) - 1] + 1,
+    })
+    result.stem_evidence = _stem_evidence_records(comparisons)
+    record_initial_comparisons(result, candidates, updated, comparisons, checked_settings)
+
+
+def _run_optional_stem_assistance(result, original, new, candidates, settings, on_progress=None):
     if not settings.stem_enabled:
         result.methods["stems"] = "not_run: optional stem assistance disabled"
         return candidates
@@ -174,6 +194,16 @@ def _run_optional_stem_assistance(result, original, new, candidates, settings):
         return candidates
 
     cache_root = Path(os.getenv("LASTRADA_CACHE_DIR", "cache")) / "demucs"
+    separator = None
+    completed_candidates, completed_comparisons = list(candidates), []
+    started = perf_counter()
+
+    def progress(updated, comparisons):
+        nonlocal completed_candidates, completed_comparisons
+        completed_candidates, completed_comparisons = list(updated), list(comparisons)
+        if on_progress:
+            on_progress(updated, comparisons)
+
     try:
         separator = DemucsSeparator(
             model_name=settings.stem_model_name,
@@ -181,24 +211,27 @@ def _run_optional_stem_assistance(result, original, new, candidates, settings):
             cache_dir=cache_root,
             segment_seconds=4,
             timeout_seconds=settings.stem_timeout_seconds,
+            reuse_model=settings.stem_reuse_model,
         )
-        started = perf_counter()
         updated, comparisons = stem_assist_candidates(
             original,
             new,
             candidates,
             separator,
             settings,
+            on_progress=progress,
         )
-        result.stem_evidence = _stem_evidence_records(comparisons)
-        from lastrada.separation.occurrences import record_initial_comparisons
-
-        record_initial_comparisons(result, candidates, updated, comparisons, settings)
+        _record_completed_stems(result, candidates, updated, comparisons, settings)
         result.timings_seconds["stem_separation"] = perf_counter() - started
     except (StemSeparationUnavailable, OSError, RuntimeError, ValueError) as exc:
+        _record_completed_stems(result, candidates, completed_candidates, completed_comparisons, settings)
+        result.timings_seconds["stem_separation"] = perf_counter() - started
         result.methods["stems"] = f"unavailable: {exc}"
         result.warnings.append(f"Stem-assisted validation did not complete: {exc}")
-        return candidates
+        return completed_candidates
+    finally:
+        if separator is not None:
+            getattr(separator, "close", lambda: None)()
 
     accepted_pairs = []
     refined_candidates = 0
@@ -233,12 +266,14 @@ def _run_optional_stem_assistance(result, original, new, candidates, settings):
 
 
 def analyze_pair(
-    intake, original, new, adapter=None, synthetic=False, threshold=None, settings=None
+    intake, original, new, adapter=None, synthetic=False, threshold=None, settings=None,
+    on_result=None,
 ):
     settings = settings or Settings()
     if max(original.duration, new.duration) > settings.max_duration_seconds:
         raise ValueError("Recording exceeds configured duration limit")
     start = perf_counter()
+    first_supported_result = None
     result = Analysis(
         case_id=intake.case_id,
         input=intake,
@@ -331,12 +366,32 @@ def analyze_pair(
                     if dtw_used
                     else "direct_waveform_or_coarse_sampleid"
                 )
+
+                def publish_ready(updated, comparisons=()):
+                    nonlocal first_supported_result
+                    if on_result is None or "master" not in intake.analysis_scope:
+                        return
+                    from lastrada.reporting.sample_flow import sample_intervals
+                    partial = result.model_copy(deep=True)
+                    partial.master = analyze_master(measurement, updated, ran)
+                    if not sample_intervals(partial):
+                        return  # Coarse similarity never opens the description screen.
+                    if first_supported_result is None:
+                        first_supported_result = perf_counter() - start
+                    _record_completed_stems(partial, candidates, updated, comparisons, settings)
+                    partial.timings_seconds["first_supported_result"] = first_supported_result
+                    partial.timings_seconds["total"] = perf_counter() - start
+                    partial.nature_of_use = draft(partial)
+                    on_result(partial)
+
+                publish_ready(candidates)
                 candidates = _run_optional_stem_assistance(
                     result,
                     original,
                     new,
                     candidates,
                     settings,
+                    on_progress=publish_ready,
                 )
             except SampleIDUnavailable as exc:
                 result.methods["sampleid"] = f"unavailable: {exc}"
@@ -360,6 +415,8 @@ def analyze_pair(
     result.nature_of_use = draft(result)
     result.timings_seconds["narrative_generation"] = perf_counter() - t
     result.timings_seconds["total"] = perf_counter() - start
+    if first_supported_result is not None:
+        result.timings_seconds["first_supported_result"] = first_supported_result
 
     if synthetic:
         result.warnings.append("SYNTHETIC DEMONSTRATION: generated signals, not a historical case.")

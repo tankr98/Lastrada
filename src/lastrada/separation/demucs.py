@@ -93,6 +93,8 @@ class DemucsSeparator:
         segment_seconds: int | float = 7,
         overlap: float = 0.10,
         timeout_seconds: int = 1800,
+        reuse_model: bool = False,
+        workers: int = 1,
     ):
         if not demucs_available():
             raise StemSeparationUnavailable(
@@ -120,6 +122,14 @@ class DemucsSeparator:
         self.timeout_seconds = int(timeout_seconds)
         self._cache_locks = {}
         self._cache_locks_guard = Lock()
+        self._processes = None
+        if reuse_model:
+            from lastrada.separation.demucs_process import DemucsProcessPool
+            self._processes = DemucsProcessPool(workers)
+
+    def close(self):
+        if self._processes is not None:
+            self._processes.close()
 
     def separate_region(
         self,
@@ -199,7 +209,9 @@ class DemucsSeparator:
             environment["OPENBLAS_NUM_THREADS"] = "1"
 
             try:
-                result = subprocess.run(
+                result = self._processes.run(
+                    command[3:], env=environment, timeout=self.timeout_seconds,
+                ) if self._processes is not None else subprocess.run(
                     command,
                     capture_output=True,
                     text=True,

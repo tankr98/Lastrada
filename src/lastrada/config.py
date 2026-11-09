@@ -36,6 +36,7 @@ class Settings(StrictModel):
     # Opt-in candidate validation. Main UI uses one bounded probe after analysis;
     # explicit laboratory configurations may still request more candidates.
     stem_enabled: bool = False
+    stem_reuse_model: bool = False
     stem_model_name: Literal["htdemucs_6s", "htdemucs"] = "htdemucs"
     stem_device: Literal["cpu", "cuda"] = "cpu"
     stem_max_candidates: int = Field(default=1, ge=1, le=50)

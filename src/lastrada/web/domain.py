@@ -65,6 +65,7 @@ class ReviewPayload(Payload):
 
 def apply_review(analysis: Analysis, payload: ReviewPayload):
     from lastrada.reporting.sample_flow import sample_intervals, LYRICS_UNASSESSED
+    from lastrada.reporting.placement import PLACEMENT_SECTIONS, description_signature
 
     sample = payload.workflow == "sample"
     expected = {"master"} if sample else set(analysis.input.analysis_scope)
@@ -151,9 +152,11 @@ def apply_review(analysis: Analysis, payload: ReviewPayload):
                 )
             elif sample:
                 path.describe.limitations.append("Reused lyrics have not been assessed.")
-            path.describe.sections = answer.sections
+            path.describe.sections = PLACEMENT_SECTIONS.get(answer.placement, answer.sections)
             path.describe.reuse_type = answer.method.strip() or None
             path.describe.repetition = answer.repetition.strip() or None
+            if answer.placement != "throughout" and path.describe.repetition == "Repeated throughout the track":
+                path.describe.repetition = "Repeated in the selected sections"
             path.describe.role_in_new_song = answer.role.strip() or None
             path.classification.placement = answer.placement
             path.classification.source = "expert_review"
@@ -177,7 +180,16 @@ def apply_review(analysis: Analysis, payload: ReviewPayload):
     candidate.review.workflow = payload.workflow
     for rights, value in paths.items():
         setattr(candidate, rights, PathResult.model_validate(value))
-    narrative = payload.narrative.strip() or creator_narrative(candidate)
+    generated = creator_narrative(candidate)
+    previous_paths = {
+        r: analysis.review.corrected[r] for r in paths
+    } if analysis.review.corrected else None
+    changed = previous_paths is not None and description_signature(paths) != description_signature(previous_paths)
+    supplied = payload.narrative.strip()
+    narrative = generated if changed or not supplied else supplied
+    previous_narrative = analysis.review.previous_narrative
+    if changed and supplied and supplied != analysis.review.generated_narrative:
+        previous_narrative = supplied
     if payload.approve:
         missing = missing_document_inputs(candidate)
         if missing:
@@ -196,4 +208,7 @@ def apply_review(analysis: Analysis, payload: ReviewPayload):
             field: getattr(payload.paths["master"], field)
             for field in ("element", "method", "repetition", "role", "lyrics")
         }
+        result.review.description_answers["repetition"] = paths["master"]["describe"]["repetition"] or ""
+    result.review.generated_narrative = generated
+    result.review.previous_narrative = previous_narrative
     return result

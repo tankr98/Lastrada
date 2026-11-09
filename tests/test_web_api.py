@@ -380,3 +380,50 @@ def test_sample_description_flow_api_confirms_description_without_timestamp_or_r
         else:
             assert "automatically estimated" in response.text
             assert "No separate replayed" not in response.text
+
+
+def test_supported_preview_is_private_readable_and_cannot_be_overwritten_or_exported(service):
+    from test_sample_flow import analysis_with_match, sample_payload
+    client,cases,_ = service
+    headers = {"Authorization": "Bearer alice", "Origin": "https://lastrada-64bab.web.app"}
+    analysis_id = client.post("/api/analyses",json=payload(),headers=headers).json()["id"]
+    root = prefix(owner_key("Bearer alice"), analysis_id)
+    state,_ = cases.read(root + "/case.json")
+    state.update(status="running", result_ready=False, result_version=0)
+    cases.write(root + "/case.json",state)
+    analysis = analysis_with_match()
+    analysis.case_id = analysis_id
+    analysis.input.case_id = analysis_id
+    cases.write(root + "/result.json",analysis.model_dump(mode="json"))
+    url = f"/api/analyses/{analysis_id}"
+    assert client.get(url+"/result",headers=headers).status_code == 409
+    state.update(result_ready=True,result_version=1)
+    cases.write(root + "/case.json",state)
+    assert client.get(url,headers=headers).json()["result_ready"]
+    assert client.get(url+"/result",headers=headers).json()["sample_review"]["status"] == "identified"
+    assert client.get(url+"/result",headers={"Authorization":"Bearer bob"}).status_code == 404
+    review = sample_payload(analysis).model_dump(mode="json")
+    assert client.put(url+"/review",json=review,headers=headers).status_code == 409
+    assert client.get(url+"/export/html",headers=headers).status_code == 409
+    state.update(status="completed")
+    cases.write(root + "/case.json",state)
+    assert client.put(url+"/review",json=review,headers=headers).status_code == 200
+    assert client.get(url+"/export/html",headers=headers).status_code == 200
+
+
+def test_incompatible_saved_result_reports_version_problem_without_raw_validation_dump(service):
+    from test_sample_flow import analysis_with_match
+    client,cases,_ = service
+    headers = {"Authorization":"Bearer alice", "Origin":"https://lastrada-64bab.web.app"}
+    analysis_id = client.post("/api/analyses",json=payload(),headers=headers).json()["id"]
+    root = prefix(owner_key("Bearer alice"),analysis_id)
+    state,_ = cases.read(root+"/case.json")
+    state["status"] = "completed"
+    cases.write(root+"/case.json",state)
+    analysis = analysis_with_match().model_dump(mode="json")
+    analysis["future_schema_field"] = "private-value"
+    cases.write(root+"/result.json",analysis)
+    response = client.get(f"/api/analyses/{analysis_id}/result",headers=headers)
+    assert response.status_code == 409
+    assert "API and worker" in response.json()["detail"]
+    assert "private-value" not in response.text and "extra_forbidden" not in response.text

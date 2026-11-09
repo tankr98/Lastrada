@@ -197,6 +197,8 @@ class Narrative(StrictModel):
 
 
 class Review(StrictModel):
+    generated_narrative: str | None = None
+    previous_narrative: str | None = None
     workflow: Literal["classic", "sample"] = "classic"
     description_answers: dict[str, str] = Field(default_factory=dict)
     status: Literal["pending", "edited", "approved"] = "pending"

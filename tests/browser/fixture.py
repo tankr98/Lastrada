@@ -40,7 +40,7 @@ def initial():
             ))
         analysis.instrument_occurrences = occurrence_rows(analysis, PROFILE["stem_model"])
         for row in analysis.instrument_occurrences:
-            row.status = "pending" if sample_scenario.startswith("automatic") else "checked"
+            row.status = "pending" if sample_scenario.startswith(("automatic", "early_")) else "checked"
             row.suggested_instruments = ["Guitar"] if sample_scenario == "prefilled" else []
     if os.getenv("LASTRADA_BROWSER_ENDING"):
         analysis.master.locate.sample_occurrences = [
