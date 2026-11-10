@@ -92,9 +92,76 @@ def test_bounded_evidence_never_replaces_a_full_interval(monkeypatch, source):
     result, comparisons = pipeline.stem_assist_candidates(
         None, None, [original], None, Settings(stem_enabled=True, stem_probe_seconds=12),
     )
-    assert result == [original] and comparisons[0].partial
+    assert result[0] == original and comparisons[0].partial
+    if source == "sampleid_rank_sequence":
+        assert len(result) == 2
+        assert (result[1].new_start, result[1].new_end) == (148, 152)
+        assert (result[1].original_start, result[1].original_end) == (296, 304)
+        assert result[1].source == "stem-assisted DTW · guitar → guitar · checked portion"
+    else:
+        assert result == [original]
     assert (seen[0].new_start, seen[0].new_end) == (148, 152)
     assert (seen[0].original_start, seen[0].original_end) == (296, 304)
+
+
+@pytest.mark.parametrize("accepted", [True, False])
+def test_bounded_match_survives_save_review_and_export_without_accepting_coarse_times(monkeypatch, accepted):
+    from lastrada.reporting.document import document_text, missing_document_inputs
+    from lastrada.reporting.sample_flow import sample_review
+    from lastrada.web.domain import ReviewPayload, UseReview, apply_review
+
+    coarse = Interval(new_start=0, new_end=300, original_start=0, original_end=600,
+                      source="sampleid_rank_sequence", status="candidate")
+    evidence = SimpleNamespace(
+        accepted=accepted, source_stem="guitar", derivative_stem="guitar", same_label=True,
+        refined_new_start=148, refined_new_end=152, mean_dtw_cost=0.1,
+        duration_ratio=0.5, pitch_shift_semitones=0, reason="test alignment",
+    )
+    fits = [evidence]
+    if accepted:
+        fits.append(SimpleNamespace(**(vars(evidence) | {
+            "source_stem": "bass", "derivative_stem": "bass",
+            "refined_new_start": 150, "refined_new_end": 156, "mean_dtw_cost": .2,
+        })))
+    monkeypatch.setattr(pipeline, "compare_candidate_stems", lambda *a, **kw:
+                        SimpleNamespace(evidence=fits))
+    settings = Settings(stem_enabled=True)
+    updated, comparisons = pipeline.stem_assist_candidates(None, None, [coarse], None, settings)
+    result = Analysis(case_id="bounded", input=Intake(
+        case_id="bounded", original_work=Work(title="Source", artist="Test"),
+        new_work=Work(title="New", artist="Test"), analysis_scope=["master"],
+    ), durations={"new": 300, "original": 600})
+    result.master.locate.sample_occurrences = updated
+    record_initial_comparisons(result, [coarse], updated, comparisons, settings)
+    saved = Analysis.model_validate_json(result.model_dump_json())
+    proposal = sample_review(saved, settings.stem_model_name)
+    if not accepted:
+        assert proposal["status"] == "not_identified"
+        assert updated == [coarse]
+        return
+    assert proposal["status"] == "identified"
+    assert proposal["description"]["element"] == "Guitar"
+    assert "not fully assessed" in proposal["description"]["repetition"]
+    assert len(proposal["intervals"]) == 1
+    assert proposal["intervals"][0]["new_start"] == 148
+    assert proposal["intervals"][0]["original_start"] == 296
+    assert saved.master.locate.sample_occurrences[0] == coarse
+    assert len(saved.instrument_occurrences) == 2
+    assert saved.instrument_occurrences[1].candidate_number == 2
+    assert saved.instrument_occurrences[0].suggested_instruments == ["Guitar", "Bass"]
+    assert saved.instrument_occurrences[1].suggested_instruments == ["Guitar"]
+    payload = ReviewPayload(workflow="sample", reviewer="Creator", approve=True,
+        paths={"master": UseReview(status="confirmed", details_confirmed=True,
+            **proposal["description"], sections=proposal["placement"]["values"]["sections"],
+            placement=proposal["placement"]["values"]["placement"])})
+    reviewed = Analysis.model_validate_json(apply_review(saved, payload).model_dump_json())
+    assert missing_document_inputs(reviewed) == []
+    text = document_text(reviewed)
+    assert "Located portions: 4.00s" in text
+    assert "reuse may extend beyond them or appear elsewhere" in text
+    assert "Estimated total use" not in text
+    assert "2:28.00" in text and "4:56.00" in text
+    assert "300.00s" not in text
 
 
 def test_direct_stem_comparison_also_bounds_its_input():
@@ -109,6 +176,53 @@ def test_direct_stem_comparison_also_bounds_its_input():
     with pytest.raises(RuntimeError, match="stop before inference"):
         compare_candidate_stems(None, None, interval, StopAtSeparation())
     assert calls == [(296, 304)]
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_real_bounded_alignment_opens_only_the_matching_sample(reverse):
+    from lastrada.reporting.sample_flow import sample_review
+
+    sr = 8000
+    rng = np.random.default_rng(991)
+    t = np.arange(sr // 2) / sr
+    notes = rng.integers(48, 85, 40)
+    samples = np.concatenate([
+        np.sin(2 * np.pi * 440 * 2 ** ((note - 69) / 12) * t) * np.sin(np.pi * t / .5)
+        for note in notes
+    ]).astype(np.float32)
+    original = Audio(samples, sr, 20)
+    copied = samples[::-1] if reverse else samples
+    new = Audio(np.pad(copied, (5 * sr, 5 * sr)), sr, 30)
+
+    class Separator:
+        def separate_region(self, audio, start, end, padding_seconds):
+            left, right = max(0, start - padding_seconds), min(audio.duration, end + padding_seconds)
+            crop = Audio(audio.samples[round(left * sr):round(right * sr)], sr, right - left)
+            return SeparatedRegion(
+                stems={"full_mix": crop, "guitar": crop}, offset_seconds=left,
+                candidate_start_local=start-left, candidate_end_local=end-left,
+                crop_duration=crop.duration, model_name="test", cache_path=Path("unused"),
+            )
+
+    coarse = Interval(new_start=5, new_end=25, original_start=0, original_end=20,
+                      source="sampleid_rank_sequence", status="candidate")
+    settings = Settings(stem_enabled=True, dtw_max_pitch_shift_semitones=0)
+    updated, comparisons = pipeline.stem_assist_candidates(original, new, [coarse], Separator(), settings)
+    result = Analysis(case_id="control", input=Intake(
+        case_id="control", original_work=Work(title="Source", artist="Test"),
+        new_work=Work(title="New", artist="Test"), analysis_scope=["master"],
+    ), durations={"new": 30, "original": 20})
+    result.master.locate.sample_occurrences = updated
+    record_initial_comparisons(result, [coarse], updated, comparisons, settings)
+    proposal = sample_review(Analysis.model_validate_json(result.model_dump_json()))
+    if reverse:
+        assert proposal["status"] == "not_identified"
+        assert updated == [coarse]
+    else:
+        assert proposal["status"] == "identified"
+        match = proposal["intervals"][0]
+        assert match["original_start"] == 6 and match["original_end"] == 14
+        assert abs(match["new_start"] - 11) < .15 and abs(match["new_end"] - 19) < .15
 
 
 def test_bounded_probe_clears_only_derived_review_metadata():

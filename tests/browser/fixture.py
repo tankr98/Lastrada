@@ -50,6 +50,23 @@ def initial():
                                     stems="not_run: no matcher")
         elif sample_scenario == "verification_incomplete":
             analysis.methods["stems"] = "unavailable: crop timeout"
+        elif sample_scenario == "recovered":
+            from types import SimpleNamespace
+            from unittest.mock import patch
+            from lastrada import pipeline
+            from lastrada.web.profile import analysis_settings
+            from lastrada.separation.occurrences import record_initial_comparisons
+
+            coarse = Interval(new_start=0, new_end=20, original_start=0, original_end=20,
+                              source="sampleid_rank_sequence", status="candidate")
+            evidence = SimpleNamespace(accepted=True, source_stem="bass", derivative_stem="bass",
+                refined_new_start=6, refined_new_end=14, mean_dtw_cost=.1,
+                duration_ratio=1, pitch_shift_semitones=0, same_label=True, reason="test alignment")
+            settings = analysis_settings()
+            with patch.object(pipeline, "compare_candidate_stems", return_value=SimpleNamespace(evidence=[evidence])):
+                updated, comparisons = pipeline.stem_assist_candidates(None, None, [coarse], None, settings)
+            analysis.master.locate.sample_occurrences = updated
+            record_initial_comparisons(analysis, [coarse], updated, comparisons, settings)
     if os.getenv("LASTRADA_BROWSER_ENDING"):
         analysis.master.locate.sample_occurrences = [
             Interval(

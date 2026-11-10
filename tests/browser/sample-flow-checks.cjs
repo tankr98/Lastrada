@@ -24,6 +24,29 @@ module.exports = async (page, data, scenario, errors) => {
     return;
   }
   await page.getByRole("heading", { name: "Does this describe your sample?" }).waitFor();
+  if (scenario === "recovered") {
+    assert.strictEqual(data.sample_review.status, "identified");
+    assert(data.analysis.master.locate.sample_occurrences.some(i => i.source === "sampleid_rank_sequence"));
+    assert(data.sample_review.intervals.every(i => i.source.startsWith("stem-assisted DTW")));
+    assert((await page.getByLabel("What did you take?", { exact: true }).inputValue()).includes("Bass"));
+    assert.strictEqual(await page.locator("[data-times], [data-field=times_confirmed]").count(), 0);
+    await page.getByRole("button", { name: "Confirm description & continue →" }).click();
+    await page.getByRole("button", { name: "Confirm placement & review draft →" }).click();
+    await page.getByRole("heading", { name: "Make it yours." }).waitFor();
+    assert.deepStrictEqual(data.analysis.review.corrected.master.locate.sample_occurrences, data.sample_review.intervals);
+    await page.getByRole("button", { name: "Mark document as reviewed", exact: true }).click();
+    await page.getByText("Reviewed and ready to download.", { exact: true }).first().waitFor();
+    await page.getByRole("button", { name: "Next: Your Nature of Use →" }).click();
+    const ready = page.waitForEvent("download");
+    await page.getByRole("button", { name: "Download HTML", exact: true }).click();
+    const document = fs.readFileSync(await (await ready).path(), "utf8");
+    assert(document.includes("NATURE OF USE") && document.includes("automatically estimated"));
+    await page.reload();
+    await page.getByRole("heading", { name: "Does this describe your sample?" }).waitFor();
+    assert((await page.getByLabel("What did you take?", { exact: true }).inputValue()).includes("Bass"));
+    assert.deepStrictEqual(errors, []);
+    return;
+  }
   if (scenario.startsWith("early_")) {
     await page.getByText(/Sample found\. Instrument details are still being checked/).waitFor();
     assert.strictEqual(data.analysis.review.corrected, null);

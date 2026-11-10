@@ -2,7 +2,7 @@
 
 from html import escape
 from lastrada.schemas.models import Analysis, PathResult
-from lastrada.reporting.sample_flow import automatic_path
+from lastrada.reporting.sample_flow import automatic_path, has_partial_matches
 from lastrada.reporting.placement import PLACEMENT_TEXT
 
 RIGHTS_NAMES = {
@@ -97,8 +97,12 @@ def document_text(analysis: Analysis):
                 path.locate.total_covered_seconds is not None
                 and path.locate.coverage_percentage is not None
             ):
+                duration_label = (
+                    "Located portions" if automatic and has_partial_matches(path.locate.sample_occurrences)
+                    else "Estimated total use" if automatic else "Reviewed total use"
+                )
                 lines.append(
-                    f"{'Estimated' if automatic else 'Reviewed'} total use: {path.locate.total_covered_seconds:.2f}s "
+                    f"{duration_label}: {path.locate.total_covered_seconds:.2f}s "
                     f"({path.locate.coverage_percentage:.1f}% of the new track)"
                 )
             else:

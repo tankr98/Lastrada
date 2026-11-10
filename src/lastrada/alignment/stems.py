@@ -44,6 +44,7 @@ class StemComparisonResult:
     evidence: list[StemPairEvidence]
     probe: Interval | None = None
     partial: bool = False
+    supported_interval: Interval | None = None
 
     @property
     def accepted(self) -> list[StemPairEvidence]:

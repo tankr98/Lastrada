@@ -84,10 +84,10 @@ def _should_run_recording_evidence(intake, adapter, settings):
 def stem_assist_candidates(original, new, candidates, separator, settings, on_progress=None):
     """Run Demucs + guarded DTW on the strongest paired candidates.
 
-    Stem evidence is a second-stage validation layer. It only replaces the
-    review timing when the entire current interval is a coarse Sony candidate
-    covered by the probe; existing direct-waveform/full-mix refinements and
-    longer candidates are preserved. Each paired probe is at most eight seconds.
+    Stem evidence is a second-stage validation layer. Fully checked coarse
+    candidates can be refined. For a longer coarse candidate, retain it and add
+    only the supported portion as a separate localization. Existing direct and
+    full-mix refinements are preserved. Each paired probe is at most eight seconds.
     """
     updated = list(candidates)
     comparisons = []
@@ -126,25 +126,30 @@ def stem_assist_candidates(original, new, candidates, separator, settings, on_pr
             publish_progress()
             continue
 
-        # Do not displace a stronger full-mix refinement. Stem evidence is used
-        # to refine a fully checked, still-coarse Sony interval. A short probe
-        # cannot set the endpoints of a longer match. All results need review.
-        if comparison.partial or candidate.source not in {
+        # A short check cannot validate the whole coarse interval, but its
+        # accepted localization must not disappear at the automatic-flow gate.
+        if candidate.source not in {
             "sampleid_rank_sequence",
             "sampleid_chunk_cosine",
         }:
             publish_progress()
             continue
 
-        updated[index] = Interval(
+        supported = Interval(
             new_start=best.refined_new_start,
             new_end=best.refined_new_end,
-            original_start=candidate.original_start,
-            original_end=candidate.original_end,
-            source=(f"stem-assisted DTW · {best.source_stem} → {best.derivative_stem}"),
+            original_start=probe.original_start,
+            original_end=probe.original_end,
+            source=(f"stem-assisted DTW · {best.source_stem} → {best.derivative_stem}"
+                    + (" · checked portion" if comparison.partial else "")),
             status="candidate",
             similarity=candidate.similarity,
         )
+        if comparison.partial:
+            comparison.supported_interval = supported
+            updated.append(supported)
+        else:
+            updated[index] = supported
         publish_progress()
 
     return updated, comparisons
@@ -242,6 +247,7 @@ def _run_optional_stem_assistance(result, original, new, candidates, settings, o
     for before, after in zip(candidates, updated, strict=False):
         if before.source != after.source and after.source.startswith("stem-assisted DTW"):
             refined_candidates += 1
+    refined_candidates += len(updated) - len(candidates)
 
     if comparisons:
         pair_summary = ", ".join(accepted_pairs) if accepted_pairs else "none accepted"

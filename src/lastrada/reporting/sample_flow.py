@@ -5,6 +5,12 @@ from lastrada.reporting.suggestions import placement_proposal
 from lastrada.schemas.models import PathResult
 
 LYRICS_UNASSESSED = "Not assessed — add any reused lyrics"
+PARTIAL_USE_NOTE = "The detected times cover checked portions only; reuse may extend beyond them or appear elsewhere."
+
+
+def has_partial_matches(intervals):
+    return any(i.source.startswith("stem-assisted DTW · ") and i.source.endswith(" · checked portion")
+               for i in intervals)
 
 
 def sample_intervals(analysis):
@@ -123,9 +129,14 @@ def sample_review(analysis, model_name=None):
     values = dict(placement.values)
     values.setdefault("sections", ["matched passages"])
     values.setdefault("placement", "selected_sections")
+    partial = has_partial_matches(intervals)
+    if partial:
+        values["repetition"] = "Repetition not fully assessed; only located portions are shown"
     ranges = merge_ranges([(i.new_start, i.new_end) for i in intervals], analysis.durations["new"])
     role = (
-        "Recurring musical texture"
+        "Musical layer in the located passages"
+        if partial
+        else "Recurring musical texture"
         if len(ranges) > 1
         else "A brief musical accent"
         if ranges[0][1] - ranges[0][0] <= 8
@@ -148,6 +159,7 @@ def sample_review(analysis, model_name=None):
             if source_labels
             else "The recording match was found, but its instrument is unresolved.",
             "role": "Suggested from the timing pattern. Confirm or edit its musical role.",
+            **({"repetition": PARTIAL_USE_NOTE} if partial else {}),
             "lyrics": "Lyrics have not been transcribed or checked; this does not mean none were used.",
         },
         "placement": {"values": values, "reason": placement.reason},

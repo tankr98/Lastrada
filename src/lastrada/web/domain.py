@@ -64,7 +64,7 @@ class ReviewPayload(Payload):
 
 
 def apply_review(analysis: Analysis, payload: ReviewPayload):
-    from lastrada.reporting.sample_flow import sample_intervals, LYRICS_UNASSESSED
+    from lastrada.reporting.sample_flow import sample_intervals, LYRICS_UNASSESSED, has_partial_matches, PARTIAL_USE_NOTE
     from lastrada.reporting.placement import PLACEMENT_SECTIONS, description_signature
 
     sample = payload.workflow == "sample"
@@ -152,6 +152,8 @@ def apply_review(analysis: Analysis, payload: ReviewPayload):
                 )
             elif sample:
                 path.describe.limitations.append("Reused lyrics have not been assessed.")
+            if sample and has_partial_matches(detected):
+                path.describe.limitations.append(PARTIAL_USE_NOTE)
             path.describe.sections = PLACEMENT_SECTIONS.get(answer.placement, answer.sections)
             path.describe.reuse_type = answer.method.strip() or None
             path.describe.repetition = answer.repetition.strip() or None

@@ -42,6 +42,18 @@ whether recording matching was unavailable, instrument verification was
 incomplete, or the available results do not confirm a recording match.
 This is a conservative eligibility rule, not a new detector or an accuracy claim.
 
+When an initial eight-second stem probe finds an accepted alignment inside a
+longer coarse candidate, the pipeline retains the coarse candidate and adds the
+supported portion separately. The automatic flow uses that portion's actual
+source and new-track bounds. Its instrument prefill comes from the selected
+alignment; other stem fits may cover different times and are not transferred.
+The coarse candidate's unchecked remainder is not included in reported use.
+These intervals are marked as checked portions. Repetition remains unassessed,
+and the document labels their measured coverage as **Located portions**, with
+an explicit note that the reuse may extend further or appear elsewhere.
+This fixes the case where accepted stem evidence was retained for diagnostics
+but discarded as a localization, leaving the description screen blocked.
+
 The screen explicitly distinguishes recording reuse from replayed melodies
 (interpolations). Automatic interpolation analysis is not implemented by this
 flow. A recording-match abstention cannot establish that no musical reuse took
@@ -85,7 +97,8 @@ PYTHON=.venv/bin/python npm run test:instruments --prefix web
 Browser scenarios cover filled answers, unresolved instruments, no supported
 match, unavailable models, incomplete verification, diagnostic downloads, saved
 edits/reload, background instrument updates, confirming during a running check,
-and a supported subset of mixed raw candidates. Existing
+and a supported subset of mixed raw candidates. A recovered bounded match is
+tested through description, review, export and reload. Existing
 classic-flow and instrument scenarios remain in the suite. API tests cover saved
 analysis validation, explicit description approval and JSON/HTML/text exports.
 

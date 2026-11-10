@@ -1,6 +1,7 @@
 """Bounded per-occurrence stem checks; suggestions never replace human review."""
 
 import hashlib
+from copy import copy
 from contextlib import ExitStack
 import json
 import os
@@ -8,7 +9,7 @@ from pathlib import Path
 from time import monotonic
 
 from lastrada.alignment.stems import compare_candidate_stems, probe_is_partial
-from lastrada.pipeline import _stem_evidence_records
+from lastrada.pipeline import _best_separated_stem_evidence, _stem_evidence_records
 from lastrada.reporting.suggestions import suggested_intervals
 from lastrada.schemas.models import InstrumentOccurrence
 from lastrada.separation.demucs import DemucsSeparator, StemSeparationUnavailable
@@ -271,7 +272,19 @@ def record_initial_comparisons(result, candidates, updated, comparisons, setting
         if before.original_start is not None and before.original_end is not None
     ]
     rows = []
-    for (index, before, interval), comparison in zip(eligible, comparisons, strict=True):
+    checked = list(zip(eligible, comparisons, strict=True))
+    for (_, before, _), comparison in list(checked):
+        supported = getattr(comparison, "supported_interval", None)
+        if supported is None:
+            continue
+        # Keep the coarse row's evidence and add a row for the actual supported
+        # portion. Other stem fits can cover different times: only the chosen
+        # fit supplies this new row's instrument label.
+        localized = copy(comparison)
+        localized.probe, localized.partial = supported, False
+        localized.evidence = [_best_separated_stem_evidence(comparison)]
+        checked.append(((updated.index(supported), before, supported), localized))
+    for (index, before, interval), comparison in checked:
         probe = getattr(comparison, "probe", None) or before
         presence_interval = probe if getattr(comparison, "partial", False) else interval
         evidence = _stem_evidence_records([comparison])
