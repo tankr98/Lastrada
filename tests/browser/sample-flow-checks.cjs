@@ -3,11 +3,24 @@ const fs = require("fs");
 const path = require("path");
 
 module.exports = async (page, data, scenario, errors) => {
-  if (scenario === "no_match") {
-    await page.getByRole("heading", { name: "We couldn’t confidently identify the sample." }).waitFor();
+  if (["no_match", "matcher_unavailable", "verification_incomplete"].includes(scenario)) {
+    const heading = scenario === "matcher_unavailable" ? "Recording matching did not complete."
+      : scenario === "verification_incomplete" ? "Sample verification did not finish."
+      : "We couldn’t confirm a recording sample.";
+    await page.getByRole("heading", { name: heading }).waitFor();
     assert.strictEqual(await page.getByRole("button", { name: "Confirm description & continue →" }).count(), 0);
-    await page.getByRole("button", { name: "Try another pair" }).click();
+    await page.getByText(/Replayed melodies \(interpolations\) are not yet assessed automatically/).waitFor();
+    await page.locator("#unresolvedDetails > summary").click();
+    assert((await page.locator("#unresolvedDetails").innerText()).includes(data.analysis.case_id));
+    const ready = page.waitForEvent("download");
+    await page.getByRole("button", { name: "Download analysis details" }).click();
+    const exported = JSON.parse(fs.readFileSync(await (await ready).path(), "utf8"));
+    assert.strictEqual(exported.case_id, data.analysis.case_id);
+    assert.strictEqual(exported.review.status, "pending");
+    assert.strictEqual(data.analysis.review.corrected, null);
+    await page.getByRole("button", { name: scenario === "no_match" ? "Try another pair" : "Back to uploads" }).click();
     await page.getByRole("heading", { name: "Start with the music." }).waitFor();
+    assert.deepStrictEqual(errors, []);
     return;
   }
   await page.getByRole("heading", { name: "Does this describe your sample?" }).waitFor();
@@ -70,7 +83,10 @@ module.exports = async (page, data, scenario, errors) => {
   if (scenario === "early_failure") {
     await page.locator("#notice").getByText("The analysis worker stopped before checks finished.").waitFor({ timeout: 60000 });
     assert.strictEqual(data.analysis.review.corrected, null);
-    assert(await page.getByRole("button", { name: "Confirm placement & review draft →" }).isEnabled());
+    // The notice is published by the poller; save() observes its failure on
+    // the next 250 ms tick before the click handler re-enables this button.
+    await page.waitForFunction(() => [...document.querySelectorAll("#view button")]
+      .some(button => button.textContent === "Confirm placement & review draft →" && !button.disabled));
     assert.strictEqual(await page.getByRole("heading", { name: "Make it yours." }).count(), 0);
     return;
   }

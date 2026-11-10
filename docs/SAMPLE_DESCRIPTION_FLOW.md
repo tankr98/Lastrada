@@ -37,9 +37,23 @@ playback, per-moment evidence, and ending uncertainty. It is not a required step
 
 The server owns automatic times. Paired direct-waveform, full-mix DTW, and
 stem-assisted DTW localizations qualify for the new flow. Coarse retrieval windows
-and PF-NMF activity alone do not. A case without a supported match displays an
-explicit inability to identify the sample and a way to try another pair.
+and PF-NMF activity alone do not. A case without a supported match explains
+whether recording matching was unavailable, instrument verification was
+incomplete, or the available results do not confirm a recording match.
 This is a conservative eligibility rule, not a new detector or an accuracy claim.
+
+The screen explicitly distinguishes recording reuse from replayed melodies
+(interpolations). Automatic interpolation analysis is not implemented by this
+flow. A recording-match abstention cannot establish that no musical reuse took
+place, and similarity candidates are not automatically relabeled as interpolations.
+There is no added replay/re-singing confirmation step.
+
+An expandable **Analysis details** panel identifies the uploaded works, records
+which checks ran, and provides the case ID and existing authenticated JSON export.
+This download is available without an approved document; HTML/text Nature of Use
+exports still require review. Model preparation failures are recorded as unavailable
+matching instead of looking like an ordinary search with no matches. Unknown
+legacy method metadata stays unknown.
 
 Description approval does not relabel timestamps as human-verified. Their raw
 source, candidate status and ending cues are retained. Corrected paths record
@@ -68,16 +82,17 @@ PYTHON=.venv/bin/python npm test --prefix web
 PYTHON=.venv/bin/python npm run test:instruments --prefix web
 ```
 
-Seven new browser scenarios cover filled answers, unresolved instruments, no
-supported match, saved edits/reload, background instrument updates, confirming
-during a running check, and a supported subset of mixed raw candidates. Existing
+Browser scenarios cover filled answers, unresolved instruments, no supported
+match, unavailable models, incomplete verification, diagnostic downloads, saved
+edits/reload, background instrument updates, confirming during a running check,
+and a supported subset of mixed raw candidates. Existing
 classic-flow and instrument scenarios remain in the suite. API tests cover saved
 analysis validation, explicit description approval and JSON/HTML/text exports.
 
 A read-only eligibility check on six older private saved song analyses found
 supported localizations in two cases (one and three intervals respectively).
 The other four contained only coarse candidates and would abstain. These were
-not rerun through current inference; this is not a rescore of the historical
+not rerun through inference for that eligibility check; this is not a rescore of the historical
 3/22 evaluation or evidence of improved real-song accuracy. No client audio is
 tracked or uploaded as part of this change.
 

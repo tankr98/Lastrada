@@ -30,7 +30,7 @@ def initial():
         analysis.input.analysis_scope = ["master"]
         analysis.master.locate.sample_occurrences = [Interval(
             new_start=8, new_end=12, original_start=2, original_end=6,
-            source="sampleid_rank_sequence" if sample_scenario == "no_match" else "direct_waveform_local_alignment",
+            source="sampleid_rank_sequence" if sample_scenario in {"no_match", "matcher_unavailable", "verification_incomplete"} else "direct_waveform_local_alignment",
             status="candidate", end_review={"new_through": 12.5, "original_through": 6.5},
         )]
         if sample_scenario == "automatic_subset":
@@ -42,6 +42,14 @@ def initial():
         for row in analysis.instrument_occurrences:
             row.status = "pending" if sample_scenario.startswith(("automatic", "early_")) else "checked"
             row.suggested_instruments = ["Guitar"] if sample_scenario == "prefilled" else []
+        analysis.methods.update(sampleid="local_cpu_chunk_embeddings", stems="demucs_htdemucs_6s_candidate_regions")
+        if sample_scenario == "matcher_unavailable":
+            analysis.master.locate.sample_occurrences = []
+            analysis.instrument_occurrences = []
+            analysis.methods.update(sampleid="unavailable: matcher preparation failed (RuntimeError)",
+                                    stems="not_run: no matcher")
+        elif sample_scenario == "verification_incomplete":
+            analysis.methods["stems"] = "unavailable: crop timeout"
     if os.getenv("LASTRADA_BROWSER_ENDING"):
         analysis.master.locate.sample_occurrences = [
             Interval(

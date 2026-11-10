@@ -249,7 +249,7 @@ function python(mode, body) {
           result = { detail: e.message };
         }
       } else if (u.pathname.includes("/export/")) {
-        if (!approved) {
+        if (!approved && !u.pathname.endsWith("/json")) {
           status = 409;
           result = { detail: "Review required" };
         } else

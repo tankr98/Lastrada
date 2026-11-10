@@ -99,14 +99,15 @@ def execute(owner, analysis_id, operation, task_id):
                 ),
                 analysis_scope=["master"],
             )
-            adapter, warning = None, None
+            adapter, warning, matcher_failure = None, None, None
             try:
                 adapter = SampleIDAdapter(
                     checkpoint(),
                     os.getenv("LASTRADA_CACHE_DIR", "/tmp/lastrada/cache") + "/sampleid",
                     batch_size=2,
                 )
-            except Exception:
+            except Exception as error:
+                matcher_failure = f"unavailable: matcher preparation failed ({type(error).__name__})"
                 warning = "Sony matching is unavailable; displayed times are PF-NMF fallback estimates. Original-track positions may be unknown."
 
             def publish_ready(partial):
@@ -125,6 +126,7 @@ def execute(owner, analysis_id, operation, task_id):
             result.methods["web_profile"] = PROFILE["name"]
             if warning:
                 result.warnings.append(warning)
+                result.methods["sampleid"] = matcher_failure
             comparison = comparison_figure(
                 spectral_view(original),
                 spectral_view(new),

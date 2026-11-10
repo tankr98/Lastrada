@@ -190,7 +190,19 @@ function render() {
   if (!analysis) return;
   if (sampleFlow && step === 3) {
     if (sampleSuggestion?.status !== "identified") {
-      frame(`<h1>We couldn’t confidently identify the sample.</h1><p class="muted">Try the exact source recording or a different pair. A rough similarity alone is not enough to identify a recording sample.</p>${button("Try another pair", "new", true)}`);
+      const checks = sampleSuggestion?.checks;
+      const states = { completed: "Completed", unavailable: "Unavailable", not_run: "Did not run", unknown: "Not recorded" };
+      const unavailable = ["matching_unavailable", "verification_incomplete"].includes(sampleSuggestion?.reason);
+      frame(`<h1>${esc(sampleSuggestion?.title || "We couldn’t confirm a recording sample.")}</h1>
+        <p class="muted">${esc(sampleSuggestion?.message || "There is not enough evidence to confirm a recording match.")}</p>
+        <p>This flow checks for reuse of the original recording. Replayed melodies (interpolations) are not yet assessed automatically, so this result does not rule out musical reuse.</p>
+        <details id="unresolvedDetails"><summary>Analysis details</summary>
+          <p>Original: ${esc(analysis.input.original_work.title)} · ${esc(analysis.input.original_work.artist)}<br>Your track: ${esc(analysis.input.new_work.title)} · ${esc(analysis.input.new_work.artist)}</p>
+          ${checks ? `<p>Recording search: ${esc(states[checks.recording_search] || "Not recorded")}<br>Initial instrument checks: ${esc(states[checks.initial_instrument_checks] || "Not recorded")}<br>Possible passages found: ${esc(checks.candidate_count)}</p>` : ""}
+          <p>Analysis ID: ${esc(caseId)}</p>
+          ${button("Download analysis details", "json")}
+        </details>
+        <div class="actions">${button(unavailable ? "Back to uploads" : "Try another pair", "new", true)}</div>`);
       return;
     }
     const f = forms.master;

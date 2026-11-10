@@ -44,6 +44,46 @@ def automatic_path(path):
     )
 
 
+def unresolved_recording(analysis):
+    """Explain an abstention without treating unavailable checks as a negative."""
+    matcher = analysis.methods.get("sampleid", "")
+    stems = analysis.methods.get("stems", "")
+    candidates = analysis.master.locate.sample_occurrences
+    paired = [i for i in candidates if i.original_start is not None]
+
+    def state(method, completed_prefix):
+        if method.startswith("unavailable:"):
+            return "unavailable"
+        if method.startswith("not_run:"):
+            return "not_run"
+        return "completed" if method.startswith(completed_prefix) else "unknown"
+
+    checks = {
+        "recording_search": state(matcher, "local_cpu_chunk_embeddings"),
+        "initial_instrument_checks": state(stems, "demucs_"),
+        "candidate_count": len(candidates),
+    }
+    title = "We couldn’t confirm a recording sample."
+    if checks["recording_search"] in {"unavailable", "not_run"}:
+        reason = "matching_unavailable"
+        title = "Recording matching did not complete."
+        message = "The recording matcher did not finish its checks. This result cannot tell us whether the original recording was sampled."
+    elif paired and checks["initial_instrument_checks"] in {"unavailable", "not_run"}:
+        reason = "verification_incomplete"
+        title = "Sample verification did not finish."
+        message = "Possible passages were found, but instrument verification did not complete. Keep the analysis details so we can investigate."
+    elif paired:
+        reason = "unconfirmed_candidates"
+        message = "Possible passages were found, but the saved results do not confirm a recording match."
+    elif checks["recording_search"] == "completed" and not candidates:
+        reason = "no_candidates"
+        message = "No candidate recording match was located in these files. Check that you uploaded the intended original recording and your track in the correct order."
+    else:
+        reason = "insufficient_evidence"
+        message = "There is not enough evidence to confirm a recording match. The saved analysis details can help us investigate."
+    return {"reason": reason, "title": title, "message": message, "checks": checks}
+
+
 def sample_review(analysis, model_name=None):
     intervals = sample_intervals(analysis)
     if not intervals:
@@ -53,6 +93,7 @@ def sample_review(analysis, model_name=None):
             "description": {},
             "notes": {},
             "placement": {"values": {}, "reason": "No supported recording match found."},
+            **unresolved_recording(analysis),
         }
     labels, source_labels = [], []
     keys = {(i.new_start, i.new_end, i.original_start, i.original_end) for i in intervals}

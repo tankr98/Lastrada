@@ -427,3 +427,48 @@ def test_incompatible_saved_result_reports_version_problem_without_raw_validatio
     assert response.status_code == 409
     assert "API and worker" in response.json()["detail"]
     assert "private-value" not in response.text and "extra_forbidden" not in response.text
+
+
+def test_worker_checkpoint_failure_is_readable_and_reported_as_incomplete_matching(service, monkeypatch):
+    from types import SimpleNamespace
+    from lastrada.audio.synthetic import demo_pair
+    from lastrada.schemas.models import Analysis
+    from lastrada.web import execute as worker
+
+    client, cases, _ = service
+    headers = {"Authorization": "Bearer alice", "Origin": "https://lastrada-64bab.web.app"}
+    analysis_id = client.post("/api/analyses", json=payload(), headers=headers).json()["id"]
+    url = f"/api/analyses/{analysis_id}"
+    client.post(url + "/run", headers=headers)
+    owner = owner_key("Bearer alice")
+    root = prefix(owner, analysis_id)
+    state, _ = cases.read(root + "/case.json")
+    monkeypatch.setattr("lastrada.web.cloud.Cases", lambda: cases)
+    monkeypatch.setattr(cases, "download", lambda path, target: target.write_bytes(b"test"), raising=False)
+    original, new = demo_pair()[:2]
+    monkeypatch.setattr("lastrada.audio.io.decode", lambda data: original)
+
+    def unavailable():
+        raise RuntimeError("private internal details must not appear in the report")
+
+    def fallback(intake, *args, adapter=None, **kwargs):
+        assert adapter is None
+        return Analysis(case_id=analysis_id, input=intake,
+                        durations={"original": original.duration, "new": new.duration},
+                        methods={"sampleid": "not_run: no checkpoint"})
+
+    monkeypatch.setattr(worker, "checkpoint", unavailable)
+    monkeypatch.setattr("lastrada.pipeline.analyze_pair", fallback)
+    monkeypatch.setattr("lastrada.reporting.comparison.spectral_view", lambda audio: None)
+    monkeypatch.setattr("lastrada.reporting.comparison.comparison_figure",
+                        lambda *args: SimpleNamespace(to_json=lambda: "{}"))
+    worker.execute(owner, analysis_id, "analyze", state["task_id"])
+    response = client.get(url + "/result", headers=headers)
+    assert response.status_code == 200
+    proposal = response.json()["sample_review"]
+    assert proposal["status"] == "not_identified"
+    assert proposal["reason"] == "matching_unavailable"
+    assert "private internal details" not in response.text
+    assert client.get(url + "/export/json", headers=headers).status_code == 200
+    assert client.get(url + "/export/json", headers={"Authorization": "Bearer bob"}).status_code == 404
+    assert client.get(url + "/export/html", headers=headers).status_code == 409
