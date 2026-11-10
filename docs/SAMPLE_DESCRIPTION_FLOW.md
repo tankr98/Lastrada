@@ -1,10 +1,19 @@
 # Prefilled recording-sample flow
 
-The Firebase interface on `local/stem-fast` now uses six steps: tracks, finding
+Supported recording matches in the Firebase interface on `local/stem-fast` use six steps: tracks, finding
 the sample, describing the sound, placement, draft review, and download.
 Supported recording matches go directly to **Does this describe your sample?**
 There is no separate timestamp confirmation or replay/re-singing question.
-The Streamlit interface and classic review API remain compatible.
+When automatic recording identification is unresolved, the app opens the earlier
+seven-step review flow at the timestamp and instrument table. Available candidates
+and timing-only fallback estimates remain visible, with playback, repeated-passage
+groups, automatic instrument checks and downloadable analysis details. No recording
+match is required merely to view the results. To make a document from these
+unconfirmed candidates, the creator can keep or edit times using the earlier review
+controls and continue through description, placement and draft review. Inspection
+and instrument checks do not approve a candidate or save a confirmed review.
+Completed classic reviews retain that flow on reload. The Streamlit interface and
+classic review API remain compatible.
 
 ## Prefill and confirmation
 
@@ -37,7 +46,8 @@ playback, per-moment evidence, and ending uncertainty. It is not a required step
 
 The server owns automatic times. Paired direct-waveform, full-mix DTW, and
 stem-assisted DTW localizations qualify for the new flow. Coarse retrieval windows
-and PF-NMF activity alone do not. A case without a supported match explains
+and PF-NMF activity alone do not qualify as automatically identified samples.
+They remain available in the review table. Its expandable diagnostics explain
 whether recording matching was unavailable, instrument verification was
 incomplete, or the available results do not confirm a recording match.
 This is a conservative eligibility rule, not a new detector or an accuracy claim.
@@ -101,6 +111,10 @@ and a supported subset of mixed raw candidates. A recovered bounded match is
 tested through description, review, export and reload. Existing
 classic-flow and instrument scenarios remain in the suite. API tests cover saved
 analysis validation, explicit description approval and JSON/HTML/text exports.
+An unresolved 41-candidate case exercises visible tables, automatic instrument
+updates without confirmation, reload, and the full earlier review/export flow.
+The frontend change also exposes candidates from existing saved results; they
+do not need a fresh audio analysis just to reach the table.
 
 A read-only eligibility check on six older private saved song analyses found
 supported localizations in two cases (one and three intervals respectively).

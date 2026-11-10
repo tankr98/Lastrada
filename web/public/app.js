@@ -189,22 +189,6 @@ function render() {
   }
   if (!analysis) return;
   if (sampleFlow && step === 3) {
-    if (sampleSuggestion?.status !== "identified") {
-      const checks = sampleSuggestion?.checks;
-      const states = { completed: "Completed", unavailable: "Unavailable", not_run: "Did not run", unknown: "Not recorded" };
-      const unavailable = ["matching_unavailable", "verification_incomplete"].includes(sampleSuggestion?.reason);
-      frame(`<h1>${esc(sampleSuggestion?.title || "We couldn’t confirm a recording sample.")}</h1>
-        <p class="muted">${esc(sampleSuggestion?.message || "There is not enough evidence to confirm a recording match.")}</p>
-        <p>This flow checks for reuse of the original recording. Replayed melodies (interpolations) are not yet assessed automatically, so this result does not rule out musical reuse.</p>
-        <details id="unresolvedDetails"><summary>Analysis details</summary>
-          <p>Original: ${esc(analysis.input.original_work.title)} · ${esc(analysis.input.original_work.artist)}<br>Your track: ${esc(analysis.input.new_work.title)} · ${esc(analysis.input.new_work.artist)}</p>
-          ${checks ? `<p>Recording search: ${esc(states[checks.recording_search] || "Not recorded")}<br>Initial instrument checks: ${esc(states[checks.initial_instrument_checks] || "Not recorded")}<br>Possible passages found: ${esc(checks.candidate_count)}</p>` : ""}
-          <p>Analysis ID: ${esc(caseId)}</p>
-          ${button("Download analysis details", "json")}
-        </details>
-        <div class="actions">${button(unavailable ? "Back to uploads" : "Try another pair", "new", true)}</div>`);
-      return;
-    }
     const f = forms.master;
     frame(`<h1>Does this describe your sample?</h1><p class="muted">We’ve filled in the answers from your analysis. Check that they look right, edit anything you want, then confirm the description.</p>
       <div class="track" data-rights="master"><h2>Your recording sample</h2>${[
@@ -219,8 +203,19 @@ function render() {
     return;
   }
   if (step === 2) {
+    const candidates = sampleSuggestion?.status === "not_identified";
+    const count = analysis.master.locate.sample_occurrences.length;
+    const heading = candidates ? (count ? "Your sample candidates." : "Your analysis results.") : "Listen & check.";
+    const guidance = candidates
+      ? count
+        ? `${count} possible passages were found. Explore their timestamps and estimated instruments below. These are candidates to review, not confirmed recording matches.`
+        : "The analysis has not located a paired recording match. Any available timing estimates are shown below; original-track positions may be unknown."
+      : "Accept the moments you hear, or unlock the table to correct them. Original-track times may be unavailable for fallback estimates.";
+    const reviewHelp = forms.publishing
+      ? 'Used the original audio without recording a separate replay? Confirm the recording sample, accept its times, and choose “No separate replay or re-sung part” below. You do not need timestamps for a use that did not happen.'
+      : "Listen and explore the results first. To continue to a draft, use the review controls below to keep or correct the passages you used.";
     frame(
-      `<h1>Listen & check.</h1><p class="muted">Accept the moments you hear, or unlock the table to correct them. Original-track times may be unavailable for fallback estimates.</p><p class="muted">Used the original audio without recording a separate replay? Confirm the recording sample, accept its times, and choose “No separate replay or re-sung part” below. You do not need timestamps for a use that did not happen.</p><div class="grid"><div><h3>The original</h3><audio controls id="originalPlayer"></audio></div><div><h3>Your track</h3><audio controls id="newPlayer"></audio></div></div>${(analysis.warnings || []).map((w) => `<p class="warning">${esc(w)}</p>`).join("")}<details><summary>See how the tracks compare</summary><div id="spectral"></div></details>${renderLoopGroups()}${Object.keys(
+      `<h1>${heading}</h1><p class="muted">${guidance}</p><p class="muted">${reviewHelp}</p><div class="grid"><div><h3>The original</h3><audio controls id="originalPlayer"></audio></div><div><h3>Your track</h3><audio controls id="newPlayer"></audio></div></div>${candidates ? analysisDetails() : (analysis.warnings || []).map((w) => `<p class="warning">${esc(w)}</p>`).join("")}<details><summary>See how the tracks compare</summary><div id="spectral"></div></details>${renderLoopGroups()}${Object.keys(
         forms,
       )
         .map((r) => renderTimes(r))
@@ -288,6 +283,17 @@ function render() {
   frame(
     `<h1>Your Nature of Use.</h1><p class="muted">A clear account of what you took and how you used it.</p><article class="document">${esc(narrative)}</article><div class="actions">${button("Download HTML", "html", true)}${button("Download text", "text")}</div><details><summary>Supporting analysis</summary>${button("Download analysis JSON", "json")}</details>${nav("Finish")}`,
   );
+}
+function analysisDetails() {
+  const checks = sampleSuggestion?.checks;
+  const states = { completed: "Completed", unavailable: "Unavailable", not_run: "Did not run", unknown: "Not recorded" };
+  return `<details id="unresolvedDetails"><summary>Analysis details</summary>
+    <p>Original: ${esc(analysis.input.original_work.title)} · ${esc(analysis.input.original_work.artist)}<br>Your track: ${esc(analysis.input.new_work.title)} · ${esc(analysis.input.new_work.artist)}</p>
+    <p>${esc(sampleSuggestion?.message || "These results still need review.")}</p>
+    ${checks ? `<p>Recording search: ${esc(states[checks.recording_search] || "Not recorded")}<br>Initial instrument checks: ${esc(states[checks.initial_instrument_checks] || "Not recorded")}<br>Possible passages found: ${esc(checks.candidate_count)}</p>` : ""}
+    <p>Replayed melodies (interpolations) are not yet assessed automatically. An unconfirmed recording match does not rule out musical reuse.</p>
+    ${(analysis.warnings || []).map(w => `<p class="muted">${esc(w)}</p>`).join("")}
+    <p>Analysis ID: ${esc(caseId)}</p>${button("Download analysis details", "json")}</details>`;
 }
 function sampleEvidence() {
   return `<details id="sampleEvidence"><summary>Sample matches and instruments</summary><p class="muted">Automatically located matches. Times remain estimates; uncertain endings are marked ≈.</p>
@@ -707,7 +713,14 @@ async function loadResult({
   const data = await json(`/api/analyses/${target}/result`);
   if (expectedPoll !== polling || target !== caseId) return false;
   analysis = data.analysis;
-  sampleFlow = !!data.sample_review;
+  // Unsupported automatic matches still have useful candidates to inspect.
+  // Use the existing review table instead of trapping those results on a dead end.
+  const nextSampleFlow = data.sample_review?.status === "identified" &&
+    !(analysis.review.corrected && analysis.review.workflow === "classic");
+  if (!preserveReview || !Object.keys(forms).length) {
+    if (nextSampleFlow !== sampleFlow && step <= 1) forms = {};
+    sampleFlow = nextSampleFlow;
+  }
   sampleSuggestion = data.sample_review || null;
   loopFamilies = data.loop_families || [];
   perMomentSupported = Array.isArray(data.instrument_rows);

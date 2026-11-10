@@ -4,13 +4,16 @@ const path = require("path");
 
 module.exports = async (page, data, scenario, errors) => {
   if (["no_match", "matcher_unavailable", "verification_incomplete"].includes(scenario)) {
-    const heading = scenario === "matcher_unavailable" ? "Recording matching did not complete."
-      : scenario === "verification_incomplete" ? "Sample verification did not finish."
-      : "We couldn’t confirm a recording sample.";
+    const heading = scenario === "matcher_unavailable" ? "Your analysis results." : "Your sample candidates.";
     await page.getByRole("heading", { name: heading }).waitFor();
     assert.strictEqual(await page.getByRole("button", { name: "Confirm description & continue →" }).count(), 0);
-    await page.getByText(/Replayed melodies \(interpolations\) are not yet assessed automatically/).waitFor();
+    await page.locator(".groupedUseTable").waitFor();
+    assert.strictEqual(await page.locator("#originalPlayer, #newPlayer").count(), 2);
+    await page.getByRole("button", { name: "Next: Describe the sound →" }).click();
+    await page.locator("#notice").getByText(/confirm whether you used audio/).waitFor();
+    assert.strictEqual(data.analysis.review.corrected, null);
     await page.locator("#unresolvedDetails > summary").click();
+    await page.getByText(/Replayed melodies \(interpolations\) are not yet assessed automatically/).waitFor();
     assert((await page.locator("#unresolvedDetails").innerText()).includes(data.analysis.case_id));
     const ready = page.waitForEvent("download");
     await page.getByRole("button", { name: "Download analysis details" }).click();
@@ -18,8 +21,61 @@ module.exports = async (page, data, scenario, errors) => {
     assert.strictEqual(exported.case_id, data.analysis.case_id);
     assert.strictEqual(exported.review.status, "pending");
     assert.strictEqual(data.analysis.review.corrected, null);
-    await page.getByRole("button", { name: scenario === "no_match" ? "Try another pair" : "Back to uploads" }).click();
+    await page.locator("#newSample").click();
     await page.getByRole("heading", { name: "Start with the music." }).waitFor();
+    assert.deepStrictEqual(errors, []);
+    return;
+  }
+  if (scenario === "candidate_table") {
+    await page.getByRole("heading", { name: "Your sample candidates." }).waitFor();
+    await page.getByText(/41 possible passages were found/).waitFor();
+    await page.locator(".groupedUseTable").waitFor();
+    await page.locator(".exactTimestamps > summary").click();
+    assert.strictEqual(await page.locator(".exactTimestamps tbody tr").count(), 41);
+    assert.strictEqual(await page.locator('[data-rights="publishing"]').count(), 0);
+    await page.waitForFunction(() => [...document.querySelectorAll(".automaticInstrumentStatus")]
+      .some(node => node.textContent.includes("is complete")));
+    assert.strictEqual(data.analysis.review.corrected, null);
+    assert.strictEqual(data.sample_review.status, "not_identified");
+    await page.locator(".instrumentPresence > summary").first().click();
+    assert((await page.locator(".groupedUseTable").innerText()).includes("Vocals"));
+    await page.locator(".instrumentPresence > summary").first().click();
+    await page.locator(".exactTimestamps > summary").click();
+    if (process.env.LASTRADA_BROWSER_OUTPUT) {
+      fs.mkdirSync(process.env.LASTRADA_BROWSER_OUTPUT, { recursive: true });
+      await page.screenshot({ path: path.join(process.env.LASTRADA_BROWSER_OUTPUT, "candidate-table.png"), fullPage: true });
+    }
+    await page.reload();
+    await page.getByRole("heading", { name: "Your sample candidates." }).waitFor();
+    await page.locator(".groupedUseTable").waitFor();
+    const track = page.locator('.track[data-rights="master"]');
+    await track.locator('[data-field="status"]').selectOption("confirmed");
+    await track.locator('[data-times="master"]').selectOption("accept");
+    await page.getByRole("button", { name: "Next: Describe the sound →" }).click();
+    await page.getByRole("heading", { name: "What did you use?" }).waitFor();
+    await page.getByLabel("What did you take?", { exact: true }).fill("A vocal phrase");
+    await page.getByLabel("Does it loop or repeat?", { exact: true }).fill("Repeated in the selected sections");
+    await page.getByLabel("What does it do in your track?", { exact: true }).fill("Background vocals");
+    await page.getByRole("button", { name: "Next: Place the sample →" }).click();
+    await page.getByLabel("Where does it appear overall?").selectOption("selected_sections");
+    await page.getByLabel("chorus", { exact: true }).check();
+    await page.getByLabel("I’ve listened and checked these details").check();
+    await page.getByRole("button", { name: "Next: Review your draft →" }).click();
+    await page.getByRole("heading", { name: "Make it yours." }).waitFor();
+    assert.strictEqual(data.analysis.review.workflow, "classic");
+    assert.strictEqual(data.analysis.review.corrected.master.locate.sample_occurrences.length, 41);
+    assert(data.analysis.master.locate.sample_occurrences.every(i => i.source === "sampleid_rank_sequence"));
+    await page.getByRole("button", { name: "Mark document as reviewed", exact: true }).click();
+    await page.getByText("Reviewed and ready to download.", { exact: true }).first().waitFor();
+    await page.getByRole("button", { name: "Next: Your Nature of Use →" }).click();
+    const ready = page.waitForEvent("download");
+    await page.getByRole("button", { name: "Download HTML", exact: true }).click();
+    const document = fs.readFileSync(await (await ready).path(), "utf8");
+    assert(document.includes("NATURE OF USE") && document.includes("A vocal phrase"));
+    await page.reload();
+    await page.getByRole("heading", { name: "Listen & check.", exact: true }).waitFor();
+    await page.locator(".groupedUseTable").waitFor();
+    assert.strictEqual(await page.locator('.track[data-rights="master"] [data-times="master"]').inputValue(), "accept");
     assert.deepStrictEqual(errors, []);
     return;
   }

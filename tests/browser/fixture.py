@@ -30,7 +30,7 @@ def initial():
         analysis.input.analysis_scope = ["master"]
         analysis.master.locate.sample_occurrences = [Interval(
             new_start=8, new_end=12, original_start=2, original_end=6,
-            source="sampleid_rank_sequence" if sample_scenario in {"no_match", "matcher_unavailable", "verification_incomplete"} else "direct_waveform_local_alignment",
+            source="sampleid_rank_sequence" if sample_scenario in {"no_match", "matcher_unavailable", "verification_incomplete", "candidate_table"} else "direct_waveform_local_alignment",
             status="candidate", end_review={"new_through": 12.5, "original_through": 6.5},
         )]
         if sample_scenario == "automatic_subset":
@@ -38,9 +38,16 @@ def initial():
                 new_start=1, new_end=3, original_start=10, original_end=12,
                 source="sampleid_rank_sequence", status="candidate",
             ))
+        if sample_scenario == "candidate_table":
+            analysis.durations = {"new": 180, "original": 180}
+            analysis.master.locate.sample_occurrences = [Interval(
+                new_start=1 + 4 * index, new_end=3 + 4 * index,
+                original_start=2 + 3 * (index % 4), original_end=4 + 3 * (index % 4),
+                source="sampleid_rank_sequence", status="candidate",
+            ) for index in range(41)]
         analysis.instrument_occurrences = occurrence_rows(analysis, PROFILE["stem_model"])
         for row in analysis.instrument_occurrences:
-            row.status = "pending" if sample_scenario.startswith(("automatic", "early_")) else "checked"
+            row.status = "pending" if sample_scenario.startswith(("automatic", "early_")) or sample_scenario == "candidate_table" else "checked"
             row.suggested_instruments = ["Guitar"] if sample_scenario == "prefilled" else []
         analysis.methods.update(sampleid="local_cpu_chunk_embeddings", stems="demucs_htdemucs_6s_candidate_regions")
         if sample_scenario == "matcher_unavailable":

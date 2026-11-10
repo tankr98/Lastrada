@@ -130,7 +130,7 @@ function python(mode, body) {
   });
   try {
     const p = await b.newPage({ viewport: { width: 1360, height: 1000 } });
-    if (sampleScenario?.startsWith("automatic"))
+    if (sampleScenario?.startsWith("automatic") || sampleScenario === "candidate_table")
       await p.addInitScript(() => { window.__LASTRADA_FORCE_AUTO_INSTRUMENTS__ = true; });
     const errors = [];
     p.on("pageerror", (e) => errors.push(e.message));
@@ -342,6 +342,16 @@ function python(mode, body) {
                 row.new_sounds = [{ instrument: "Drums", energy_share: 0.8, scope: "sample", start: 1, end: 1.4 }];
               }
               data.analysis.instrument_occurrences = data.instrument_rows;
+              if (sampleScenario === "candidate_table") {
+                data.analysis.stem_evidence = [];
+                data.instrument_rows.forEach(row => {
+                  row.status = "checked";
+                  row.evidence = [];
+                  row.suggested_instruments = [];
+                  row.source_sounds = [{ instrument: "Vocals", energy_share: .8, scope: "sample",
+                    start: row.interval.original_start, end: row.interval.original_end }];
+                });
+              }
             }
           }
         }
