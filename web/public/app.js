@@ -241,6 +241,12 @@ function canApproveDraft() {
 }
 async function openDraft() {
   const target = caseId;
+  // A table review can change match status. Refresh only the untouched method
+  // default; preserve wording the user deliberately edited or saved.
+  if (!sampleFlow && forms.master && !touchedSoundFields.has("method")) {
+    forms.master.method = "";
+    draftInitialized = false;
+  }
   try {
     if (!(await refreshDraft({ prefill: !draftInitialized }))) return;
   } catch (error) {
@@ -453,7 +459,6 @@ function applyInstrumentPrefill() {
       ? "Sampled passage; source sounds include " + sourceLabels.join(", ").toLowerCase()
       : "Sampled passage — instrument not identified",
   };
-  if (!sampleFlow && labels.length) suggestions.method = "Sampled the original recording";
   for (const [field, value] of Object.entries(suggestions)) {
     if (
       !touchedSoundFields.has(field) &&

@@ -93,6 +93,7 @@ module.exports = async (page, data, scenario, errors) => {
     await lyrics.fill("");
     await settled(page);
     await page.getByRole("button", { name: "View detailed analysis", exact: true }).first().click();
+    await page.locator('[data-rights="master"] [data-field="status"]').selectOption("confirmed");
     await page.locator('[data-times="master"]').selectOption("edit");
     await page.locator('[data-interval="0:new_start"]').fill("16");
     await page.locator('[data-interval="0:new_end"]').fill("19");
@@ -100,6 +101,7 @@ module.exports = async (page, data, scenario, errors) => {
     await openDraft(page);
     assert.strictEqual(await page.getByLabel("Where does it appear overall?").inputValue(), "outro_only");
     assert.strictEqual(await lyrics.inputValue(), "");
+    assert.strictEqual(await page.getByLabel("How did you use it?", { exact: true }).inputValue(), "Sampled the original recording");
     assert((await page.locator("#draftDocument").innerText()).includes("0:16.00"));
   }
   if (scenario === "placement_edit" || scenario === "draft_race") {

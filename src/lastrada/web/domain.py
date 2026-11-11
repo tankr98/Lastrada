@@ -88,7 +88,8 @@ def draft_preview(analysis: Analysis, payload: DraftPayload, model_name=None):
         if payload.table_draft:
             from lastrada.reporting.table_draft import proposal as table_proposal
             proposal = table_proposal(analysis, intervals, model_name, rights,
-                                     confirmed=review.workflow == "sample" or answer.times_confirmed)
+                                     confirmed=review.workflow == "sample" or
+                                     (answer.status == "confirmed" and answer.times_confirmed))
         proposals[rights] = proposal
         if payload.prefill and answer.status != "no_use":
             preserved = payload.preserve_fields.get(rights, [])

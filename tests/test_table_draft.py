@@ -2,7 +2,7 @@ from copy import deepcopy
 
 from lastrada.schemas.models import Analysis, Intake, Work, Interval, InstrumentPresence
 from lastrada.web.domain import DraftPayload, draft_preview
-from lastrada.reporting.table_draft import ROLE_UNKNOWN
+from lastrada.reporting.table_draft import ROLE_UNKNOWN, METHOD_UNCONFIRMED
 from lastrada.separation.occurrences import occurrence_rows
 from lastrada.web.profile import PROFILE
 
@@ -87,3 +87,17 @@ def test_missing_positions_and_instruments_stay_unknown_and_examples_cannot_supp
     assert "has not been established" in text
     for invented in ["synthesizer", "pitched", "sped up", "keep runnin", "beneath the new artist"]:
         assert invented not in text
+
+
+def test_method_default_requires_both_recording_and_timing_confirmation():
+    analysis = table_case()
+    payload = request(analysis)
+    payload.paths["master"].times_confirmed = True
+    still_unconfirmed = draft_preview(analysis, payload, PROFILE["stem_model"])
+    assert still_unconfirmed["paths"]["master"]["method"] == METHOD_UNCONFIRMED
+    assert "Recording reuse remains unconfirmed" in still_unconfirmed["narrative"]
+    payload.paths["master"].status = "confirmed"
+    reviewed = draft_preview(analysis, payload, PROFILE["stem_model"])
+    assert reviewed["paths"]["master"]["method"] == "Sampled the original recording"
+    assert "Recording reuse remains unconfirmed" not in reviewed["narrative"]
+    assert analysis.review.corrected is None
