@@ -14,15 +14,31 @@ receive a draft and retain their detailed tables.
 Supported automatic matches retain their estimated timing provenance. Unresolved
 candidates keep the earlier accept/edit controls: merely viewing the table does
 not confirm a recording match. Previously saved classic reviews remain compatible.
-The Streamlit workflow is unchanged.
+The Streamlit workflow is unchanged; its document exports use the same compact
+layout with a separate evidence appendix.
 
 ## Presets, editing, and confirmation
 
 The draft treats the completed analysis as read-only input, using the selected
 table intervals and current instrument evidence. It names both original and
-new-track timestamps in the prose. For repeated passages it reuses existing
-grouping/counts and includes up to three actual representative occurrences per
-group (up to four groups), with every row available in the detailed view.
+new-track timestamps in the prose. The generated description is at most **two
+paragraphs of four sentences each**, with one actual paired timestamp example.
+It describes the material, placement and repetition, then offers a clearly
+tentative musical interpretation grounded in timing and checked instrument labels
+(for example, a recurring bass part **could provide a rhythmic foundation**).
+Context-only sound estimates do not establish a sampled instrument or that role.
+
+Every selected timestamp, existing group count, per-row instrument estimate,
+checked scope and ending warning remains in **Exact timestamps and evidence** at
+the bottom. This section starts collapsed in the app and is included in full in
+both downloads, even when placement is **throughout the track**. The document no
+longer repeats all the preset fields beneath its narrative. Long supplied fields
+and lyrics are excerpted in the generated story and retained in full below.
+Manual wording is preserved rather than silently shortened; the paragraph budget
+applies to automatically generated descriptions.
+Existing approved wording remains intact. **Edit the wording → Regenerate short
+description** creates a new unapproved preview without reanalysis and keeps the
+previous wording for reference; saving or confirming remains explicit.
 Sound, method, repetition, musical role, placement, and lyrics have editable
 presets. Unknown instruments remain explicit, and source-presence estimates are
 not relabeled as verified sampled instruments. Generic **matched passages** avoids

@@ -41,6 +41,11 @@ module.exports = async (page, data, scenario, errors) => {
     assert((await page.locator(`[data-field=${field}]`).inputValue()).trim(), `${field} must be prefilled`);
   assert(await page.getByLabel("Where does it appear overall?").inputValue());
   assert((await page.locator("#draftDocument").innerText()).includes("NATURE OF USE"));
+  assert(!(await page.locator("#draftEvidence").evaluate(el => el.open)), "Exact evidence starts collapsed");
+  const initialStory = await page.getByLabel("Edit your Nature of Use draft").inputValue();
+  assert(initialStory.split("\n\n").length <= 2);
+  for (const paragraph of initialStory.split("\n\n"))
+    assert((paragraph.match(/[.!?](?:\s|$)/g) || []).length <= 4, "Keep each generated paragraph to at most four sentences");
   const documentBox = await page.locator("#draftDocument").boundingBox();
   const controlsBox = await page.locator("#draftControls").boundingBox();
   assert(documentBox.y < controlsBox.y, "The drafted document must come before the controls");
@@ -54,7 +59,11 @@ module.exports = async (page, data, scenario, errors) => {
       assert(text.includes(`${stamp(i.original_start)}–${stamp(i.original_end)} in the original recording`));
       assert(text.includes(`${stamp(i.new_start)}–${stamp(i.new_end)} in the new track`));
       const row = data.instrument_rows.find(r => ["new_start", "new_end", "original_start", "original_end"].every(k => r.interval[k] === i[k]));
-      for (const label of row?.suggested_instruments || []) assert(text.toLowerCase().includes(label.toLowerCase()));
+      for (const label of row?.suggested_instruments || []) {
+        const word = { Vocals: "vocal", Drums: "drum" }[label] || label.toLowerCase();
+        assert(text.toLowerCase().includes(word));
+        assert((await page.locator("#draftEvidence").textContent()).toLowerCase().includes(label.toLowerCase()));
+      }
     }
     assert.strictEqual(JSON.stringify(data.analysis), rawBefore, "Automatic draft must leave the real analysis intact");
     if (process.env.LASTRADA_BROWSER_OUTPUT) {
@@ -70,13 +79,14 @@ module.exports = async (page, data, scenario, errors) => {
   if (scenario === "prefilled") assert((await element.inputValue()).includes("Guitar"));
   if (scenario === "recovered") {
     assert((await element.inputValue()).includes("Bass"));
-    assert((await page.locator("#draftDocument").innerText()).includes("Located portions"));
+    await page.locator("#draftEvidence summary").click();
+    assert((await page.locator("#draftEvidence").innerText()).includes("Located portions"));
   }
   if (scenario === "candidate_table") {
     await page.waitForFunction(() => document.querySelector('[data-field="element"]')?.value.includes("source sounds include vocals"));
     await settled(page);
     assert((await element.inputValue()).includes("source sounds include vocals"));
-    assert((await page.locator("#draftDocument").innerText()).includes("source sounds include vocals"));
+    assert((await page.locator("#draftDocument").innerText()).includes("vocals estimated in the source"));
   }
   assert((await lyrics.inputValue()).includes("Not assessed"));
   if (["reload_edits", "automatic", "automatic_subset", "early_result"].includes(scenario)) {
@@ -147,6 +157,12 @@ module.exports = async (page, data, scenario, errors) => {
     assert((await page.locator("#draftDocument").innerText()).includes("Retry this preview"));
     assert.strictEqual(data.analysis.review.status, "edited");
   }
+  const longWording = "My original opening description.\n\nMy original middle description.\n\nMy original closing description.";
+  if (scenario === "shorten_saved") {
+    await page.getByText("Edit the wording", { exact: true }).click();
+    await page.getByLabel("Edit your Nature of Use draft").fill(longWording);
+    await settled(page);
+  }
   const beforeDetails = await page.getByLabel("Edit your Nature of Use draft").inputValue();
   await page.getByRole("button", { name: "View detailed analysis", exact: true }).first().click();
   assert.strictEqual(await page.locator("audio").count(), 2);
@@ -194,6 +210,28 @@ module.exports = async (page, data, scenario, errors) => {
   assert.strictEqual(await element.inputValue(), confirmedElement);
   if (["reload_edits", "automatic", "automatic_subset", "early_result"].includes(scenario)) assert.strictEqual(await lyrics.inputValue(), "");
   assert(!(await page.getByRole("button", { name: confirmable ? "Download HTML" : "Download draft HTML", exact: true }).isDisabled()));
+  if (scenario === "shorten_saved") {
+    assert((await page.locator("#draftDocument").textContent()).includes(longWording), "Saved approved wording remains intact until regeneration is requested");
+    const stored = JSON.stringify(data.analysis);
+    await page.getByText("Edit the wording", { exact: true }).click();
+    await page.getByRole("button", { name: "Regenerate short description", exact: true }).click();
+    await settled(page);
+    const short = await page.getByLabel("Edit your Nature of Use draft").inputValue();
+    assert(short.split("\n\n").length <= 2 && !short.includes("My original middle"));
+    assert.strictEqual(JSON.stringify(data.analysis), stored, "Regenerating does not change the stored review");
+    await page.getByText("Earlier draft wording", { exact: true }).click();
+    assert.strictEqual(await page.locator("#previousWording pre").textContent(), longWording);
+    assert((await page.locator("#draftDocument").textContent()).includes("Draft — review required"));
+    await page.getByRole("button", { name: "Confirm Nature of Use", exact: true }).click();
+    await page.getByText("Reviewed and ready to download.", { exact: true }).first().waitFor();
+    assert.strictEqual(data.analysis.review.corrected.nature_of_use.text, short);
+    assert.strictEqual(data.analysis.review.previous_narrative, longWording);
+    await page.reload();
+    await page.getByRole("heading", { name: "Your Nature of Use.", exact: true }).waitFor();
+    await settled(page);
+    await page.getByText("Earlier draft wording", { exact: true }).click();
+    assert.strictEqual(await page.locator("#previousWording pre").textContent(), longWording);
+  }
   await page.setViewportSize({ width: 700, height: 1000 });
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 2));
   assert.deepStrictEqual(errors, []);

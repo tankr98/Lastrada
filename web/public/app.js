@@ -217,15 +217,15 @@ function render() {
   if (step === 5) renderDraft();
 }
 function renderDraft() {
-  frame(`<h1>Your Nature of Use.</h1><p class="muted">Drafted automatically from your analysis. Edit the wording or preset details below. Open the detailed analysis whenever you want to inspect the evidence.</p>
-    <div class="actions">${button("View detailed analysis", "back")}</div><p id="draftStatus" role="status"></p><article class="document" id="draftDocument">${esc(draftDocument || "Preparing your Nature of Use…")}</article>
+  frame(`<h1>Your Nature of Use.</h1><p class="muted">A short description of your sample and its possible musical role. Edit the wording or preset details below; the exact timestamps are kept at the bottom of the draft.</p>
+    <div class="actions">${button("View detailed analysis", "back")}</div><p id="draftStatus" role="status"></p><article class="document" id="draftDocument">${draftMarkup()}</article>
     <section id="draftControls"><h2>Adjust your Nature of Use</h2><p class="muted">These details are already filled in. Changes update the draft above. Instrument estimates and timing-based suggestions remain editable; lyrics have not been transcribed.</p>
     ${active().map(r => { const f = forms[r]; const proposal = draftProposals[r]; return `<div class="track" data-rights="${r}"><h3>${name(r)}</h3><div class="grid">${[
       ["What did you take?", "element"], ["How did you use it?", "method"], ["Does it loop or repeat?", "repetition"], ["What does it do in your track?", "role"], ["Any reused lyrics? (optional)", "lyrics"],
     ].map(([label, key]) => `<div>${field(label, key, f[key])}<small data-proposal-note="${key}">${esc(proposal?.notes[key] || "")}</small></div>`).join("")}
       <label>Where does it appear overall?<select data-field="placement">${!f.placement ? '<option value="">Choose placement</option>' : ""}${Object.entries(placements).map(([key, label]) => `<option value="${key}" ${f.placement === key ? "selected" : ""}>${label}</option>`).join("")}</select></label></div>
       <div class="checks">${["matched passages", "whole track", "intro", "verse", "chorus", "bridge", "outro"].map(s => `<label><input type="checkbox" data-section="${s}" ${f.sections.includes(s) ? "checked" : ""}>${s}</label>`).join("")}</div></div>`; }).join("")}
-      <details><summary>Edit the wording</summary><label>Edit your Nature of Use draft<textarea data-global="narrative" rows="9">${esc(narrative)}</textarea></label><small>Changing a preset regenerates the draft. Your earlier custom wording is kept below.</small></details>
+      <details><summary>Edit the wording</summary><label>Edit your Nature of Use draft<textarea data-global="narrative" rows="9">${esc(narrative)}</textarea></label><small>Changing a preset regenerates the draft. Your earlier custom wording is kept below.</small><div class="actions">${button("Regenerate short description", "regenerate")}</div></details>
       <details id="previousWording" ${previousNarrative ? "" : "hidden"}><summary>Earlier draft wording</summary><pre class="document">${esc(previousNarrative)}</pre></details>
       ${field("Your name / reviewer", "reviewer", reviewer)}<label>Anything still to check? (optional)<textarea data-global="notes">${esc(notes)}</textarea></label>
       <div class="actions">${button("Save draft", "save")}${canApproveDraft() ? button("Confirm Nature of Use", "approve", true) : ""}</div>
@@ -234,6 +234,15 @@ function renderDraft() {
       <details><summary>Supporting analysis</summary>${button("Download analysis JSON", "json")}</details>
     </section><div class="stepNav">${button("View detailed analysis", "back")}${button("New Sample", "new")}</div><div hidden inert aria-hidden="true"><section id="instruments">${renderInstruments()}</section></div>`);
   updateDraftStatus();
+}
+function draftMarkup() {
+  const text = draftDocument || "Preparing your Nature of Use…";
+  const marker = "\n\nExact timestamps and evidence\n";
+  const split = text.indexOf(marker);
+  if (split < 0) return esc(text);
+  // Keep the full document's text unchanged for preview/download parity while
+  // leaving the granular evidence collapsed beneath the short description.
+  return `${esc(text.slice(0, split))}\n\n<details id="draftEvidence"><summary>Exact timestamps and evidence</summary>\n${esc(text.slice(split + marker.length))}</details>`;
 }
 function canApproveDraft() {
   return sampleFlow || (active().length > 0 && Object.values(forms).every(f =>
@@ -310,7 +319,9 @@ async function refreshDraft({ prefill = false } = {}) {
     if (target !== caseId || revision !== draftRevision) return false;
     draftInitialized = true;
     if (step === 5) {
-      $("#draftDocument").textContent = draftDocument;
+      const expanded = $("#draftEvidence")?.open;
+      $("#draftDocument").innerHTML = draftMarkup();
+      if (expanded && $("#draftEvidence")) $("#draftEvidence").open = true;
       $('[data-global="narrative"]').value = narrative;
       $("#previousWording").hidden = !previousNarrative;
       $("#previousWording pre").textContent = previousNarrative;
@@ -1177,6 +1188,21 @@ $("#view").addEventListener("click", async (e) => {
       forms[r].times_confirmed = false;
       tableTimesChanged(r);
       render();
+    } else if (action === "regenerate") {
+      previousNarrative = (approved ? analysis.review.corrected?.nature_of_use.text : narrative) || previousNarrative;
+      narrative = "";
+      generated = "";
+      approved = false;
+      for (const form of Object.values(forms)) {
+        form.description_confirmed = false;
+        form.details_confirmed = false;
+      }
+      el.disabled = true;
+      try {
+        if (!(await refreshDraft({ prefill: !draftInitialized }))) return;
+        render();
+        notice("Short description ready. Your earlier wording is kept below.");
+      } finally { if (el.isConnected) el.disabled = false; }
     } else if (action === "save" || action === "approve") {
       el.disabled = true;
       try {

@@ -142,8 +142,8 @@ if __name__ == "__main__":
                 ).model_dump_json()
             )
         elif mode == "html":
-            print(document_html(analysis))
+            print(document_html(analysis, PROFILE["stem_model"]))
         elif mode == "json":
             print(analysis.model_dump_json(indent=2))
         else:
-            print(document_text(analysis))
+            print(document_text(analysis, PROFILE["stem_model"]))

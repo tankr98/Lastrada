@@ -69,7 +69,7 @@ def test_document_escapes_user_text():
     assert "&lt;script&gt;" in document_html(result)
 
 
-def test_throughout_summarizes_times_in_narrative_and_both_exports():
+def test_throughout_keeps_detailed_times_in_both_export_appendices():
     result = example()
     path = result.master
     path.locate.detection_status = "verified"
@@ -84,8 +84,11 @@ def test_throughout_summarizes_times_in_narrative_and_both_exports():
     for text in (result.nature_of_use.text, document_text(result), document_html(result)):
         assert "throughout the track" in text
         assert "A short loop repeated in the track" in text
-        assert "0:02.00" not in text
-        assert "0:05.00" not in text
+    assert "0:02.00" not in result.nature_of_use.text
+    for text in (document_text(result), document_html(result)):
+        appendix = text.split("Exact timestamps and evidence")[1]
+        assert "0:02.00–0:03.00" in appendix
+        assert "0:05.00–0:06.00" in appendix
     # Detailed evidence is preserved for analysis and JSON export.
     assert len(result.model_dump()["master"]["locate"]["sample_occurrences"]) == 2
     path.classification.placement = Placement.VERSES

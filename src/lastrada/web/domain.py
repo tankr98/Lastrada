@@ -109,7 +109,7 @@ def draft_preview(analysis: Analysis, payload: DraftPayload, model_name=None):
         "narrative": result.review.corrected["nature_of_use"]["text"],
         "generated": result.review.generated_narrative,
         "previous_narrative": result.review.previous_narrative,
-        "document": document_text(result),
+        "document": document_text(result, model_name),
     }
 
 
@@ -244,6 +244,9 @@ def apply_review(analysis: Analysis, payload: ReviewPayload, model_name=None):
     supplied = payload.narrative.strip()
     narrative = generated if changed or not supplied else supplied
     previous_narrative = analysis.review.previous_narrative
+    saved_narrative = (analysis.review.corrected or {}).get("nature_of_use", {}).get("text")
+    if payload.table_draft and saved_narrative and saved_narrative != narrative:
+        previous_narrative = saved_narrative
     if changed and supplied and supplied != analysis.review.generated_narrative:
         previous_narrative = supplied
     if payload.approve:

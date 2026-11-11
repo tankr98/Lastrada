@@ -318,7 +318,7 @@ def create_app(cases=None, queue=None, authenticate_user=None, mode=None):
             ) from None
         from lastrada.reporting.document import document_text
 
-        return {"analysis": reviewed.model_dump(mode="json"), "document": document_text(reviewed)}
+        return {"analysis": reviewed.model_dump(mode="json"), "document": document_text(reviewed, PROFILE["stem_model"])}
 
     @app.get("/api/analyses/{analysis_id}/comparison")
     def comparison(analysis_id: UUID, request: Request):
@@ -352,9 +352,9 @@ def create_app(cases=None, queue=None, authenticate_user=None, mode=None):
         if missing_document_inputs(analysis) or analysis.review.status != "approved":
             raise HTTPException(409, "Complete and review your Nature of Use before exporting")
         if kind == "html":
-            return Response(document_html(analysis), media_type="text/html")
+            return Response(document_html(analysis, PROFILE["stem_model"]), media_type="text/html")
         if kind == "text":
-            return Response(document_text(analysis), media_type="text/plain")
+            return Response(document_text(analysis, PROFILE["stem_model"]), media_type="text/plain")
         raise HTTPException(404)
 
     return app

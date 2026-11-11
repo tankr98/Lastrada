@@ -2,7 +2,7 @@
 
 from html import escape
 from lastrada.schemas.models import Analysis, PathResult
-from lastrada.reporting.sample_flow import automatic_path, has_partial_matches
+from lastrada.reporting.sample_flow import automatic_path
 from lastrada.reporting.placement import PLACEMENT_TEXT
 
 RIGHTS_NAMES = {
@@ -50,7 +50,7 @@ def timestamp(value):
     return "not provided" if value is None else f"{int(value) // 60}:{value % 60:05.2f}"
 
 
-def document_text(analysis: Analysis):
+def document_text(analysis: Analysis, model_name=None):
     data = analysis.review.corrected or analysis.model_dump(mode="json")
     state = "Reviewed" if analysis.review.status == "approved" else "Draft — review required"
     lines = [
@@ -65,84 +65,27 @@ def document_text(analysis: Analysis):
         data["nature_of_use"]["text"],
         "",
     ]
-    for rights, path in document_paths(analysis).items():
-        if analysis.review.workflow == "sample" and path.locate.detection_status == "not_requested":
-            continue
-        lines += [RIGHTS_NAMES[rights]]
-        automatic = automatic_path(path)
-        if path.locate.detection_status == "verified" or automatic:
-            if automatic:
-                lines.append("Sample timings are automatically estimated; description reviewed separately.")
-            for feature in path.describe.elements:
-                if feature.value:
-                    lines.append(
-                        f"{feature.feature.replace('_', ' ').capitalize()}: {feature.value}"
-                    )
-            if path.classification.placement == "throughout":
-                lines.append("Placement: throughout the track")
-                if automatic and any(i.end_review for i in path.locate.sample_occurrences):
-                    lines.append("Some endings are uncertain and may extend beyond the estimated times.")
-            else:
-                if path.classification.placement:
-                    lines.append("Placement: " + PLACEMENT_TEXT[path.classification.placement])
-                for occurrence in path.locate.sample_occurrences:
-                    approximate = "≈ " if automatic and occurrence.end_review else ""
-                    lines.append(
-                        f"In new track: {timestamp(occurrence.new_start)}–{approximate}{timestamp(occurrence.new_end)}; "
-                        f"in original: {timestamp(occurrence.original_start)}–{approximate}{timestamp(occurrence.original_end)}"
-                    )
-                    if approximate:
-                        lines.append("The ending is uncertain and may extend beyond the displayed time.")
-            if (
-                path.locate.total_covered_seconds is not None
-                and path.locate.coverage_percentage is not None
-            ):
-                duration_label = (
-                    "Located portions" if automatic and has_partial_matches(path.locate.sample_occurrences)
-                    else "Estimated total use" if automatic else "Reviewed total use"
-                )
-                lines.append(
-                    f"{duration_label}: {path.locate.total_covered_seconds:.2f}s "
-                    f"({path.locate.coverage_percentage:.1f}% of the new track)"
-                )
-            else:
-                lines.append("Total duration of use: not yet confirmed")
-        elif path.locate.detection_status == "not_detected":
-            lines.append("No reuse identified in this rights path; this is not a legal conclusion.")
-        else:
-            lines.append("Use has not been confirmed. Automated matching needs listening review.")
-        for label, value in [
-            ("Sections", ", ".join(path.describe.sections)),
-            ("How used", path.describe.reuse_type),
-            ("Repetition", path.describe.repetition),
-            ("Role in the track", path.describe.role_in_new_song),
-        ]:
-            lines.append(f"{label}: {value or 'not yet provided'}")
-        lines.extend(path.describe.limitations)
-        lines.append("")
-    missing = missing_document_inputs(analysis)
-    if missing:
-        lines += (
-            ["Still needed to complete this document"] + [f"• {item}" for item in missing] + [""]
-        )
     if analysis.review.reviewer:
         label = "Reviewed by" if analysis.review.status == "approved" else "Reviewer"
         lines.append(f"{label}: {analysis.review.reviewer}")
     if analysis.review.notes:
         lines.append(f"Review notes: {analysis.review.notes}")
-    lines += [
-        "",
-        "This document describes musical use. It is not a license or a clearance decision.",
-    ]
-    return "\n".join(lines)
+    lines.append("This document describes musical use. It is not a license or a clearance decision.")
+    lines += ["", "Exact timestamps and evidence"]
+    from lastrada.reporting.table_draft import evidence_lines
+    lines.extend(evidence_lines(analysis, document_paths(analysis), model_name))
+    missing = missing_document_inputs(analysis)
+    if missing:
+        lines += ["Still needed to complete this document"] + [f"• {item}" for item in missing]
+    return "\n".join(lines).rstrip()
 
 
-def document_html(analysis):
+def document_html(analysis, model_name=None):
     return (
         '<!doctype html><html><head><meta charset="utf-8"><title>Nature of Use</title>'
         "<style>body{font:16px system-ui;max-width:850px;margin:50px auto;padding:24px;color:#271d36}"
         "pre{font:inherit;white-space:pre-wrap;line-height:1.7}@media print{body{margin:0}}</style>"
-        f"</head><body><pre>{escape(document_text(analysis))}</pre></body></html>"
+        f"</head><body><pre>{escape(document_text(analysis, model_name))}</pre></body></html>"
     )
 
 

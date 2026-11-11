@@ -104,7 +104,7 @@ def test_confirming_description_preserves_automated_times_and_exports_without_re
     assert missing_document_inputs(saved) == []
     text = document_text(saved)
     assert "automatically estimated" in text and "Estimated total use" in text
-    assert "≈ " in text and "ending is uncertain" in text
+    assert "≈ " in text and "endings are uncertain" in text
     assert "Reused lyrics have not been assessed" in text
     assert "No separate replayed" not in text and "Replayed melody" not in text
     assert not any(f["feature"] == "lyrics" for f in path["describe"]["elements"])

@@ -340,6 +340,8 @@ footer {
 }
 
 .instrumentTable { max-height: 480px; }
+.document #draftEvidence { margin-bottom: 0; }
+.document #draftEvidence summary { font-weight: 600; }
 .endingReview {
   display: block;
   max-width: 28rem;
