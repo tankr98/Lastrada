@@ -153,6 +153,11 @@ module.exports = async (page, data, scenario, errors) => {
   await page.getByRole("button", { name: "Confirm Nature of Use", exact: true }).click();
   await page.getByText("Reviewed and ready to download.", { exact: true }).first().waitFor({ timeout: 60000 });
   const corrected = data.analysis.review.corrected;
+  const confirmedElement = data.analysis.review.description_answers.element;
+  if (["reload_edits", "automatic", "automatic_subset", "early_result"].includes(scenario))
+    assert.strictEqual(confirmedElement, savedElement, "Late evidence must preserve deliberate edits");
+  if (scenario === "automatic_confirm")
+    assert(confirmedElement.includes("Bass"), "Untouched defaults must include the completed instrument evidence");
   assert.strictEqual(data.analysis.review.workflow, unsupported ? "classic" : "sample");
   assert.strictEqual(corrected.master.locate.detection_status, unsupported ? "verified" : "candidate");
   assert(data.analysis.master.locate.sample_occurrences.every(i => i.source !== "expert_review"));
@@ -169,7 +174,7 @@ module.exports = async (page, data, scenario, errors) => {
   await page.reload();
   await page.getByRole("heading", { name: "Listen & check.", exact: true }).waitFor();
   await openDraft(page);
-  assert.strictEqual(await element.inputValue(), savedElement);
+  assert.strictEqual(await element.inputValue(), confirmedElement);
   if (["reload_edits", "automatic", "automatic_subset", "early_result"].includes(scenario)) assert.strictEqual(await lyrics.inputValue(), "");
   assert(!(await page.getByRole("button", { name: "Download HTML", exact: true }).isDisabled()));
   await page.setViewportSize({ width: 700, height: 1000 });
