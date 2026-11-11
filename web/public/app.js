@@ -49,7 +49,7 @@ let sampleFlow = true, sampleSuggestion = null;
 let analysisPending = false, analysisError = "", touchedPlacement = false;
 let draftDocument = "", draftInitialized = false, draftRevision = 0, draftTimer;
 let draftBusy = false, draftError = "", draftProposals = {}, previousNarrative = "";
-const titles = ["Your tracks", "Finding your sample", "Listen & check", "Nature of Use"];
+const titles = ["Your tracks", "Finding your sample", "Nature of Use"];
 const placements = {
   throughout: "Throughout the track",
   intro_only: "Intro only",
@@ -78,11 +78,11 @@ function button(label, action, primary = false) {
 }
 function frame(content) {
   const visibleTitles = titles;
-  const visibleStep = step === 5 ? 3 : step;
+  const visibleStep = step === 5 ? 2 : step;
   $("#progress").innerHTML =
     step < 0
       ? ""
-      : `STEP ${visibleStep + 1} OF ${visibleTitles.length} · ${visibleTitles[visibleStep]}<div class="bar"><span style="width:${((visibleStep + 1) / visibleTitles.length) * 100}%"></span></div>`;
+      : `STEP ${visibleStep + 1} OF ${visibleTitles.length} · ${step === 2 ? "Detailed analysis" : visibleTitles[visibleStep]}<div class="bar"><span style="width:${((visibleStep + 1) / visibleTitles.length) * 100}%"></span></div>`;
   $("#view").innerHTML = (analysisPending
     ? '<p id="analysisProgress" role="status">Sample found. Instrument details are still being checked; you can explore the table and open your draft.</p>'
     : "") + content;
@@ -204,9 +204,9 @@ function render() {
       ? "Review the located moments below, then open your prefilled Nature of Use. You can adjust the draft on the next screen."
       : forms.publishing
       ? 'Used the original audio without recording a separate replay? Confirm the recording sample, accept its times, and choose “No separate replay or re-sung part” below. You do not need timestamps for a use that did not happen.'
-      : "Listen and explore the results first. To continue to a draft, use the review controls below to keep or correct the passages you used.";
+      : "Explore the results and optionally review or correct passages here. Your Nature of Use draft keeps your edits when you return.";
     frame(
-      `<h1>${heading}</h1><p class="muted">${guidance}</p><p class="muted">${reviewHelp}</p><div class="grid"><div><h3>The original</h3><audio controls id="originalPlayer"></audio></div><div><h3>Your track</h3><audio controls id="newPlayer"></audio></div></div>${candidates ? analysisDetails() : (analysis.warnings || []).map((w) => `<p class="warning">${esc(w)}</p>`).join("")}<details><summary>See how the tracks compare</summary><div id="spectral"></div></details>${renderLoopGroups()}${sampleFlow ? `<div class="track" data-rights="master"><h2>Your recording sample</h2>${sampleTimeTable()}</div>` : Object.keys(forms).map(r => renderTimes(r)).join("")}<section id="instruments" aria-label="Instrument check">${renderInstruments()}</section>${nav("Nature of Use →")}`,
+      `<div class="actions">${button("← Return to Nature of Use", "next")}</div><h1>${heading}</h1><p class="muted">${guidance}</p><p class="muted">${reviewHelp}</p><div class="grid"><div><h3>The original</h3><audio controls id="originalPlayer"></audio></div><div><h3>Your track</h3><audio controls id="newPlayer"></audio></div></div>${candidates ? analysisDetails() : (analysis.warnings || []).map((w) => `<p class="warning">${esc(w)}</p>`).join("")}<details><summary>See how the tracks compare</summary><div id="spectral"></div></details>${renderLoopGroups()}${sampleFlow ? `<div class="track" data-rights="master"><h2>Your recording sample</h2>${sampleTimeTable()}</div>` : Object.keys(forms).map(r => renderTimes(r)).join("")}<section id="instruments" aria-label="Instrument check">${renderInstruments()}</section>${nav("Nature of Use →")}`,
     );
     loadAudio().catch((e) => notice(e.message));
     $("#spectral").parentElement.addEventListener("toggle", (e) => {
@@ -217,8 +217,8 @@ function render() {
   if (step === 5) renderDraft();
 }
 function renderDraft() {
-  frame(`<h1>Your Nature of Use.</h1><p class="muted">Drafted from your sample table. Read it first, then adjust any of the preset details below. Confirm the finished document when it looks right.</p>
-    <p id="draftStatus" role="status"></p><article class="document" id="draftDocument">${esc(draftDocument || "Preparing your Nature of Use…")}</article>
+  frame(`<h1>Your Nature of Use.</h1><p class="muted">Drafted automatically from your analysis. Edit the wording or preset details below. Open the detailed analysis whenever you want to inspect the evidence.</p>
+    <div class="actions">${button("View detailed analysis", "back")}</div><p id="draftStatus" role="status"></p><article class="document" id="draftDocument">${esc(draftDocument || "Preparing your Nature of Use…")}</article>
     <section id="draftControls"><h2>Adjust your Nature of Use</h2><p class="muted">These details are already filled in. Changes update the draft above. Instrument estimates and timing-based suggestions remain editable; lyrics have not been transcribed.</p>
     ${active().map(r => { const f = forms[r]; const proposal = draftProposals[r]; return `<div class="track" data-rights="${r}"><h3>${name(r)}</h3><div class="grid">${[
       ["What did you take?", "element"], ["How did you use it?", "method"], ["Does it loop or repeat?", "repetition"], ["What does it do in your track?", "role"], ["Any reused lyrics? (optional)", "lyrics"],
@@ -228,12 +228,28 @@ function renderDraft() {
       <details><summary>Edit the wording</summary><label>Edit your Nature of Use draft<textarea data-global="narrative" rows="9">${esc(narrative)}</textarea></label><small>Changing a preset regenerates the draft. Your earlier custom wording is kept below.</small></details>
       <details id="previousWording" ${previousNarrative ? "" : "hidden"}><summary>Earlier draft wording</summary><pre class="document">${esc(previousNarrative)}</pre></details>
       ${field("Your name / reviewer", "reviewer", reviewer)}<label>Anything still to check? (optional)<textarea data-global="notes">${esc(notes)}</textarea></label>
-      <div class="actions">${button("Save draft", "save")}${button("Confirm Nature of Use", "approve", true)}</div>
+      <div class="actions">${button("Save draft", "save")}${canApproveDraft() ? button("Confirm Nature of Use", "approve", true) : ""}</div>
       <p id="reviewStatus">${approved ? "Reviewed and ready to download." : "Draft — not yet confirmed."}</p>
-      <div class="actions">${button("Download HTML", "html")}${button("Download text", "text")}</div>
+      <div class="actions">${button(approved ? "Download HTML" : "Download draft HTML", "html")}${button(approved ? "Download text" : "Download draft text", "text")}</div>
       <details><summary>Supporting analysis</summary>${button("Download analysis JSON", "json")}</details>
-    </section><div class="stepNav">${button("← Back to table", "back")}${button("New Sample", "new")}</div>`);
+    </section><div class="stepNav">${button("View detailed analysis", "back")}${button("New Sample", "new")}</div><div hidden inert aria-hidden="true"><section id="instruments">${renderInstruments()}</section></div>`);
   updateDraftStatus();
+}
+function canApproveDraft() {
+  return sampleFlow || (active().length > 0 && Object.values(forms).every(f =>
+    f.status === "no_use" || (f.status === "confirmed" && validTimes(f))));
+}
+async function openDraft() {
+  const target = caseId;
+  try {
+    if (!(await refreshDraft({ prefill: !draftInitialized }))) return;
+  } catch (error) {
+    if (target !== caseId) return;
+    notice(error.message);
+  }
+  if (target !== caseId) return;
+  step = 5;
+  render();
 }
 function updateDraftStatus() {
   if (step !== 5) return;
@@ -241,8 +257,9 @@ function updateDraftStatus() {
   $("#draftDocument").setAttribute("aria-busy", String(draftBusy));
   $("#reviewStatus").textContent = approved ? "Reviewed and ready to download." : "Draft — not yet confirmed.";
   for (const action of ["html", "text"])
-    $(`[data-action="${action}"]`).disabled = !approved || draftBusy || !!draftError;
-  $('[data-action="approve"]').disabled = draftBusy || !!draftError;
+    $(`[data-action="${action}"]`).disabled = draftBusy || !!draftError || !draftDocument;
+  const approve = $('[data-action="approve"]');
+  if (approve) approve.disabled = draftBusy || !!draftError;
 }
 function queueDraft({ regenerate = false } = {}) {
   if (regenerate && narrative && narrative !== generated) {
@@ -431,7 +448,7 @@ function applyInstrumentPrefill() {
     const row = instrumentRow(i);
     return row?.status === "checked" ? (row.source_sounds || []).filter(s => s.scope === "sample").map(s => s.instrument) : [];
   }))];
-  const suggestions = sampleFlow ? sampleSuggestion?.description || {} : {
+  const suggestions = sampleFlow ? { element: sampleSuggestion?.description?.element || "Sampled passage — instrument not identified" } : {
     element: labels.length ? labels.join(", ") : sourceLabels.length
       ? "Sampled passage; source sounds include " + sourceLabels.join(", ").toLowerCase()
       : "Sampled passage — instrument not identified",
@@ -638,28 +655,14 @@ async function analyze() {
 async function poll({ instruments = false } = {}) {
   const serial = ++polling;
   let errors = 0;
-  let previewShown = false, previewVersion = -1;
   while (serial === polling && user) {
     try {
       const state = await json(`/api/analyses/${caseId}`);
       if (serial !== polling) return;
-      if (!instruments && state.status === "running" && state.result_ready &&
-          state.result_version !== previewVersion) {
-        if (!(await loadResult({ preserveReview: previewShown, expectedPoll: serial }))) return;
-        if (sampleSuggestion?.status === "identified") {
-          analysisPending = true;
-          instrumentBusy = true;
-          instrumentMessage = "Finishing the initial instrument comparisons…";
-          if (!previewShown) { step = 2; render(); }
-          else updateInstruments();
-          previewShown = true;
-          previewVersion = state.result_version;
-        }
-      }
       if (state.status === "completed") {
         if (
           !(await loadResult({
-            preserveReview: instruments || previewShown,
+            preserveReview: instruments,
             expectedPoll: serial,
           }))
         )
@@ -668,12 +671,6 @@ async function poll({ instruments = false } = {}) {
         analysisPending = false;
         analysisError = "";
         $("#analysisProgress")?.remove();
-        if (previewShown) {
-          instrumentBusy = false;
-          instrumentMessage = "";
-          updateInstruments();
-          return;
-        }
         if (instruments || state.operation === "stems") {
           instrumentBusy = false;
           instrumentError = state.error || "";
@@ -684,12 +681,10 @@ async function poll({ instruments = false } = {}) {
             : "";
           if (instruments) updateInstruments();
           else {
-            step = 2;
-            render();
+            await openDraft();
           }
         } else {
-          step = 2;
-          render();
+          await openDraft();
         }
         return;
       }
@@ -714,11 +709,6 @@ async function poll({ instruments = false } = {}) {
       errors = 0;
     } catch (e) {
       if (e.terminal || ++errors >= 5) {
-        if (previewShown) {
-          analysisError = e.terminal ? e.message : "Connection lost. Your unsaved edits are still on this page; copy them before reloading to reconnect.";
-          if ($("#analysisProgress")) $("#analysisProgress").textContent = analysisError;
-          notice(analysisError);
-        }
         if (instruments) {
           instrumentBusy = false;
           instrumentError = e.terminal
@@ -932,6 +922,7 @@ function reviewPayload(approve = false) {
   return {
     workflow: sampleFlow ? "sample" : "classic",
     description_initialized: draftInitialized,
+    table_draft: true,
     paths: Object.fromEntries(
       Object.entries(forms).map(([r, f]) => [
         r,
@@ -983,7 +974,7 @@ async function save(approve = false, { waitForInstruments = true } = {}) {
   if (analysisError) throw Error(analysisError);
   // A finishing instrument job may have queued a newer preview while save waited.
   // Flush it before capturing the revision being persisted.
-  if (step === 5 && !(await refreshDraft())) return false;
+  if (step === 5 && !(await refreshDraft({ prefill: !draftInitialized }))) return false;
   const serial = polling;
   const revision = draftRevision;
   const payload = reviewPayload(approve);
@@ -1007,7 +998,10 @@ async function save(approve = false, { waitForInstruments = true } = {}) {
   return true;
 }
 async function download(kind) {
-  const blob = await (
+  const draft = !approved && kind !== "json";
+  if (draft && (draftBusy || draftError || !draftDocument)) throw Error("Wait for the draft to finish updating.");
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Nature of Use draft</title><style>body{font:16px system-ui;max-width:850px;margin:50px auto;padding:24px}pre{font:inherit;white-space:pre-wrap;line-height:1.7}</style></head><body><pre>${esc(draftDocument)}</pre></body></html>`;
+  const blob = draft ? new Blob([kind === "html" ? html : draftDocument], { type: kind === "html" ? "text/html" : "text/plain" }) : await (
     await api(`/api/analyses/${caseId}/export/${kind}`)
   ).blob();
   const url = URL.createObjectURL(blob),
@@ -1016,7 +1010,7 @@ async function download(kind) {
   link.download =
     kind === "json"
       ? "supporting-analysis.json"
-      : `nature-of-use.${kind === "text" ? "txt" : kind}`;
+      : `nature-of-use${draft ? "-draft" : ""}.${kind === "text" ? "txt" : kind}`;
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
@@ -1165,13 +1159,9 @@ $("#view").addEventListener("click", async (e) => {
       step = 2;
       render();
     } else if (action === "next") {
-      gate();
       el.disabled = true;
-      try {
-        if (!(await refreshDraft({ prefill: !draftInitialized }))) return;
-        step = 5;
-        render();
-      } finally { if (el.isConnected) el.disabled = false; }
+      try { await openDraft(); }
+      finally { if (el.isConnected) el.disabled = false; }
     } else if (action === "add" && r) {
       forms[r].intervals.push({
         new_start: null,

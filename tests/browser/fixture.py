@@ -138,7 +138,7 @@ if __name__ == "__main__":
         elif mode == "review":
             print(
                 apply_review(
-                    analysis, ReviewPayload.model_validate(body["payload"])
+                    analysis, ReviewPayload.model_validate(body["payload"]), model_name=PROFILE["stem_model"]
                 ).model_dump_json()
             )
         elif mode == "html":

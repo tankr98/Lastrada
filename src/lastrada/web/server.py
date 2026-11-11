@@ -309,7 +309,7 @@ def create_app(cases=None, queue=None, authenticate_user=None, mode=None):
         current, generation = repo().read(root + "/result.json")
         from lastrada.schemas.models import Analysis
 
-        reviewed = apply_review(Analysis.model_validate(current), body)
+        reviewed = apply_review(Analysis.model_validate(current), body, model_name=PROFILE["stem_model"])
         try:
             repo().write(root + "/result.json", reviewed.model_dump(mode="json"), generation)
         except PreconditionFailed:

@@ -417,6 +417,8 @@ function python(mode, body) {
       console.log(`Sample workflow passed: ${sampleScenario}; API requests: ${requests}`);
       return;
     }
+    await p.getByRole("heading", { name: "Your Nature of Use.", exact: true }).waitFor();
+    await p.getByRole("button", { name: "View detailed analysis", exact: true }).first().click();
     await p
       .getByRole("heading", { name: "Listen & check.", exact: true })
       .waitFor();
@@ -495,13 +497,6 @@ function python(mode, body) {
     await master.locator("[data-times]").selectOption("accept");
     if (endingScenario && await master.locator("[data-ending-review]").count())
       throw Error("Existing confirmation did not resolve the ending cue");
-    await p
-      .getByRole("button", { name: "Nature of Use →", exact: true })
-      .click();
-    await p.getByText(/Replayed music: choose Yes only/).waitFor();
-    const alertBox = await p.locator("#notice").boundingBox();
-    if (!alertBox || alertBox.y < 0 || alertBox.y >= 1000)
-      throw Error("Blocking guidance is off screen");
     // A change-only select event must persist its value, independent of input events.
     await publishing.locator('[data-field="status"]').evaluate((el) => {
       el.value = "no_use";
@@ -510,12 +505,6 @@ function python(mode, body) {
     await master.locator("[data-times]").selectOption("pending");
     if (endingScenario)
       await master.locator("[data-ending-review-summary]").waitFor({ state: "visible" });
-    await p
-      .getByRole("button", { name: "Nature of Use →", exact: true })
-      .click();
-    await p
-      .getByText(/accept the suggested times, or edit and confirm/)
-      .waitFor();
     await master.locator("[data-times]").selectOption("accept");
     if (instrumentScenario === "no_source") {
       if (
@@ -678,7 +667,7 @@ function python(mode, body) {
           .inputValue()) !== "Drums"
       )
         throw Error("Edited timestamp retained stale sound prefill");
-      await p.getByRole("button", { name: "← Back to table", exact: true }).click();
+      await p.getByRole("button", { name: "View detailed analysis", exact: true }).first().click();
       await p
         .getByRole("button", {
           name: "Continue instrument checks",
@@ -731,7 +720,7 @@ function python(mode, body) {
     await p
       .getByLabel("What did you take?", { exact: true })
       .fill("A bassline");
-    await p.getByRole("button", { name: "← Back to table", exact: true }).click();
+    await p.getByRole("button", { name: "View detailed analysis", exact: true }).first().click();
     await p
       .getByRole("button", { name: "Nature of Use →", exact: true })
       .click();
@@ -743,7 +732,7 @@ function python(mode, body) {
       throw Error("User sound edit was overwritten");
     if (instrumentScenario === "success") {
       await p.getByLabel("What did you take?", { exact: true }).fill("");
-      await p.getByRole("button", { name: "← Back to table", exact: true }).click();
+      await p.getByRole("button", { name: "View detailed analysis", exact: true }).first().click();
       await p
         .getByRole("button", {
           name: "Nature of Use →",
@@ -818,6 +807,8 @@ function python(mode, body) {
         delete row.ending_review_context;
     }
     await p.reload();
+    await p.getByRole("heading", { name: "Your Nature of Use.", exact: true }).waitFor();
+    await p.getByRole("button", { name: "View detailed analysis", exact: true }).first().click();
     await p
       .getByRole("heading", { name: "Listen & check.", exact: true })
       .waitFor();

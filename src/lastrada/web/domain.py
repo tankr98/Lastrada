@@ -57,6 +57,7 @@ class UseReview(Payload):
 class ReviewPayload(Payload):
     workflow: Literal["classic", "sample"] = "classic"
     description_initialized: bool = False
+    table_draft: bool = False
     paths: dict[Literal["master", "publishing"], UseReview]
     narrative: str = Field(default="", max_length=20000)
     reviewer: str = Field(default="", max_length=200)
@@ -83,18 +84,24 @@ def draft_preview(analysis: Analysis, payload: DraftPayload, model_name=None):
         answer.details_confirmed = False
         intervals = sample_intervals(analysis) if review.workflow == "sample" else answer.intervals
         proposal = description_proposal(analysis, intervals, model_name, rights)
+        old_defaults = dict(proposal["description"])
+        if payload.table_draft:
+            from lastrada.reporting.table_draft import proposal as table_proposal
+            proposal = table_proposal(analysis, intervals, model_name, rights,
+                                     confirmed=review.workflow == "sample" or answer.times_confirmed)
         proposals[rights] = proposal
         if payload.prefill and answer.status != "no_use":
             preserved = payload.preserve_fields.get(rights, [])
             for field, value in proposal["description"].items():
-                if field not in preserved and not getattr(answer, field):
+                if field not in preserved and (not getattr(answer, field)
+                        or (payload.table_draft and getattr(answer, field) == old_defaults.get(field))):
                     setattr(answer, field, value)
             values = proposal["placement"]["values"]
             if "sections" not in preserved and not answer.sections:
                 answer.sections = values["sections"]
             if "placement" not in preserved and not answer.placement:
                 answer.placement = Placement(values["placement"])
-    result = apply_review(analysis, review)
+    result = apply_review(analysis, review, model_name=model_name)
     return {
         "paths": {r: a.model_dump(mode="json") for r, a in review.paths.items()},
         "proposals": proposals,
@@ -105,7 +112,7 @@ def draft_preview(analysis: Analysis, payload: DraftPayload, model_name=None):
     }
 
 
-def apply_review(analysis: Analysis, payload: ReviewPayload):
+def apply_review(analysis: Analysis, payload: ReviewPayload, model_name=None):
     from lastrada.reporting.sample_flow import sample_intervals, LYRICS_UNASSESSED, has_partial_matches, PARTIAL_USE_NOTE
     from lastrada.reporting.placement import PLACEMENT_SECTIONS, description_signature
 
@@ -224,7 +231,11 @@ def apply_review(analysis: Analysis, payload: ReviewPayload):
     candidate.review.workflow = payload.workflow
     for rights, value in paths.items():
         setattr(candidate, rights, PathResult.model_validate(value))
-    generated = creator_narrative(candidate)
+    if payload.table_draft:
+        from lastrada.reporting.table_draft import narrative as table_narrative
+        generated = table_narrative(analysis, paths, model_name)
+    else:
+        generated = creator_narrative(candidate)
     previous_paths = {
         r: analysis.review.corrected[r] for r in paths
     } if analysis.review.corrected else None

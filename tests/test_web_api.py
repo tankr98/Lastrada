@@ -474,7 +474,8 @@ def test_worker_checkpoint_failure_is_readable_and_reported_as_incomplete_matchi
     assert client.get(url + "/export/html", headers=headers).status_code == 409
 
 
-def test_draft_preview_is_private_read_only_and_never_approves(service):
+@pytest.mark.parametrize("table_draft", [False, True])
+def test_draft_preview_is_private_read_only_and_never_approves(service, table_draft):
     from lastrada.schemas.models import Analysis, Intake, Work, Interval
 
     client, cases, queue = service
@@ -489,7 +490,7 @@ def test_draft_preview_is_private_read_only_and_never_approves(service):
         original_start=10, original_end=14, source="direct_waveform_local_alignment")]
     cases.write(root + "/result.json", analysis.model_dump(mode="json"))
     url = f"/api/analyses/{analysis_id}"
-    body = {"workflow": "sample", "prefill": True, "approve": True,
+    body = {"workflow": "sample", "prefill": True, "approve": True, "table_draft": table_draft,
             "paths": {"master": {"status": "confirmed"}}}
     assert client.post(url + "/draft", headers=headers, json=body).status_code == 409
     state.update(status="running", result_ready=True)
@@ -503,6 +504,9 @@ def test_draft_preview_is_private_read_only_and_never_approves(service):
     assert "Draft — review required" in draft["document"]
     assert draft["paths"]["master"]["element"]
     assert not draft["paths"]["master"]["details_confirmed"]
+    if table_draft:
+        assert "0:10.00–0:14.00 in the original recording" in draft["narrative"]
+        assert "0:00.00–0:04.00 in the new track" in draft["narrative"]
     assert cases.data == before
     assert queue.enqueue.call_count == 0
     assert client.get(url + "/export/html", headers=headers).status_code == 409
