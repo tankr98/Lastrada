@@ -101,11 +101,20 @@ def sample_review(analysis, model_name=None):
             "placement": {"values": {}, "reason": "No supported recording match found."},
             **unresolved_recording(analysis),
         }
+    return {
+        "status": "identified",
+        "intervals": [i.model_dump(mode="json") for i in intervals],
+        **description_proposal(analysis, intervals, model_name),
+    }
+
+
+def description_proposal(analysis, intervals, model_name=None, rights="master"):
+    """Draft defaults from the selected table rows, without confirming them."""
     labels, source_labels = [], []
     keys = {(i.new_start, i.new_end, i.original_start, i.original_end) for i in intervals}
     from lastrada.separation.occurrences import occurrence_rows
 
-    for row in occurrence_rows(analysis, model_name):
+    for row in occurrence_rows(analysis, model_name) if rights == "master" else []:
         i = row.interval
         if (
             row.status != "checked"
@@ -125,10 +134,13 @@ def sample_review(analysis, model_name=None):
             else "Sampled passage — instrument not identified"
         )
     )
+    if rights != "master":
+        element = "Replayed musical passage"
     placement = placement_proposal(intervals, analysis.durations["new"])
     values = dict(placement.values)
     values.setdefault("sections", ["matched passages"])
     values.setdefault("placement", "selected_sections")
+    values.setdefault("repetition", "Repetition not assessed")
     partial = has_partial_matches(intervals)
     if partial:
         values["repetition"] = "Repetition not fully assessed; only located portions are shown"
@@ -139,15 +151,13 @@ def sample_review(analysis, model_name=None):
         else "Recurring musical texture"
         if len(ranges) > 1
         else "A brief musical accent"
-        if ranges[0][1] - ranges[0][0] <= 8
+        if ranges and ranges[0][1] - ranges[0][0] <= 8
         else "An extended musical layer"
     )
     return {
-        "status": "identified",
-        "intervals": [i.model_dump(mode="json") for i in intervals],
         "description": {
             "element": element,
-            "method": "Sampled the original recording",
+            "method": "Sampled the original recording" if rights == "master" else "Replayed or re-sang the original music",
             "repetition": values["repetition"],
             "role": role,
             "lyrics": LYRICS_UNASSESSED,
@@ -157,7 +167,7 @@ def sample_review(analysis, model_name=None):
             if labels
             else "Source sounds are estimates, not a determination of which instrument was sampled."
             if source_labels
-            else "The recording match was found, but its instrument is unresolved.",
+            else "The instrument is unresolved; the draft keeps this explicit.",
             "role": "Suggested from the timing pattern. Confirm or edit its musical role.",
             **({"repetition": PARTIAL_USE_NOTE} if partial else {}),
             "lyrics": "Lyrics have not been transcribed or checked; this does not mean none were used.",

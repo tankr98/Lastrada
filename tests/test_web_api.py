@@ -472,3 +472,40 @@ def test_worker_checkpoint_failure_is_readable_and_reported_as_incomplete_matchi
     assert client.get(url + "/export/json", headers=headers).status_code == 200
     assert client.get(url + "/export/json", headers={"Authorization": "Bearer bob"}).status_code == 404
     assert client.get(url + "/export/html", headers=headers).status_code == 409
+
+
+def test_draft_preview_is_private_read_only_and_never_approves(service):
+    from lastrada.schemas.models import Analysis, Intake, Work, Interval
+
+    client, cases, queue = service
+    headers = {"Authorization": "Bearer alice", "Origin": "https://lastrada-64bab.web.app"}
+    analysis_id = client.post("/api/analyses", json=payload(), headers=headers).json()["id"]
+    root = prefix(owner_key("Bearer alice"), analysis_id)
+    state, generation = cases.read(root + "/case.json")
+    analysis = Analysis(case_id=analysis_id, input=Intake(case_id=analysis_id,
+        original_work=Work(title="Source", artist="Artist"), new_work=Work(title="Mix", artist="Artist"),
+        analysis_scope=["master"]), durations={"new": 60, "original": 60})
+    analysis.master.locate.sample_occurrences = [Interval(new_start=0, new_end=4,
+        original_start=10, original_end=14, source="direct_waveform_local_alignment")]
+    cases.write(root + "/result.json", analysis.model_dump(mode="json"))
+    url = f"/api/analyses/{analysis_id}"
+    body = {"workflow": "sample", "prefill": True, "approve": True,
+            "paths": {"master": {"status": "confirmed"}}}
+    assert client.post(url + "/draft", headers=headers, json=body).status_code == 409
+    state.update(status="running", result_ready=True)
+    cases.write(root + "/case.json", state, generation)
+    before = deepcopy(cases.data)
+    assert client.post(url + "/draft", json=body).status_code == 401
+    assert client.post(url + "/draft", headers={"Authorization": "Bearer bob"}, json=body).status_code == 404
+    response = client.post(url + "/draft", headers=headers, json=body)
+    assert response.status_code == 200
+    draft = response.json()
+    assert "Draft — review required" in draft["document"]
+    assert draft["paths"]["master"]["element"]
+    assert not draft["paths"]["master"]["details_confirmed"]
+    assert cases.data == before
+    assert queue.enqueue.call_count == 0
+    assert client.get(url + "/export/html", headers=headers).status_code == 409
+    body["paths"]["master"]["intervals"] = [{"new_start": 40, "new_end": 45, "source": "creator_review"}]
+    assert client.post(url + "/draft", headers=headers, json=body).status_code == 400
+    assert cases.data == before

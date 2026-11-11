@@ -47,15 +47,9 @@ let config,
   instrumentError = "";
 let sampleFlow = true, sampleSuggestion = null;
 let analysisPending = false, analysisError = "", touchedPlacement = false;
-const titles = [
-  "Your tracks",
-  "Finding your sample",
-  "Listen & check",
-  "Describe the sound",
-  "Place the sample",
-  "Review your draft",
-  "Your Nature of Use",
-];
+let draftDocument = "", draftInitialized = false, draftRevision = 0, draftTimer;
+let draftBusy = false, draftError = "", draftProposals = {}, previousNarrative = "";
+const titles = ["Your tracks", "Finding your sample", "Listen & check", "Nature of Use"];
 const placements = {
   throughout: "Throughout the track",
   intro_only: "Intro only",
@@ -83,14 +77,14 @@ function button(label, action, primary = false) {
   return `<button data-action="${action}" class="${primary ? "primary" : ""}">${label}</button>`;
 }
 function frame(content) {
-  const visibleTitles = sampleFlow ? titles.filter((_, index) => index !== 2) : titles;
-  const visibleStep = sampleFlow && step > 2 ? step - 1 : step;
+  const visibleTitles = titles;
+  const visibleStep = step === 5 ? 3 : step;
   $("#progress").innerHTML =
     step < 0
       ? ""
       : `STEP ${visibleStep + 1} OF ${visibleTitles.length} · ${visibleTitles[visibleStep]}<div class="bar"><span style="width:${((visibleStep + 1) / visibleTitles.length) * 100}%"></span></div>`;
   $("#view").innerHTML = (analysisPending
-    ? '<p id="analysisProgress" role="status">Sample found. Instrument details are still being checked; you can start reviewing the description.</p>'
+    ? '<p id="analysisProgress" role="status">Sample found. Instrument details are still being checked; you can explore the table and open your draft.</p>'
     : "") + content;
   window.scrollTo({ top: 0, behavior: "instant" });
 }
@@ -98,7 +92,7 @@ function field(label, key, value = "", placeholder = "") {
   return `<label>${label}<input data-field="${key}" value="${esc(value)}" placeholder="${esc(placeholder)}"></label>`;
 }
 function nav(next) {
-  return `<div class="stepNav">${step > (sampleFlow ? 3 : 2) ? button("← Back", "back") : button("New Sample", "new")}${button(next, "next", true)}</div>`;
+  return `<div class="stepNav">${step > 2 ? button("← Back", "back") : button("New Sample", "new")}${button(next, "next", true)}</div>`;
 }
 function creditsFrom(name) {
   const stem = name.replace(/\.[^.]+$/, "");
@@ -137,6 +131,14 @@ async function json(path, options) {
   return (await api(path, options)).json();
 }
 function reset() {
+  clearTimeout(draftTimer);
+  draftRevision++;
+  draftDocument = "";
+  draftInitialized = false;
+  draftBusy = false;
+  draftError = "";
+  draftProposals = {};
+  previousNarrative = "";
   analysisPending = false;
   analysisError = "";
   touchedPlacement = false;
@@ -188,20 +190,6 @@ function render() {
     return;
   }
   if (!analysis) return;
-  if (sampleFlow && step === 3) {
-    const f = forms.master;
-    frame(`<h1>Does this describe your sample?</h1><p class="muted">We’ve filled in the answers from your analysis. Check that they look right, edit anything you want, then confirm the description.</p>
-      <div class="track" data-rights="master"><h2>Your recording sample</h2>${[
-        ["What did you take?", "element"], ["How did you use it?", "method"],
-        ["Does it loop or repeat?", "repetition"], ["What does it do in your track?", "role"],
-        ["Any reused lyrics? (optional)", "lyrics"],
-      ].map(([label, key]) => `${field(label, key, f[key])}${sampleSuggestion.notes[key] ? `<small data-description-note="${key}">${esc(sampleSuggestion.notes[key])}</small>` : ""}`).join("")}</div>
-      ${sampleEvidence()}${nav("Confirm description & continue →")}`);
-    $("#sampleEvidence").addEventListener("toggle", (event) => {
-      if (event.target.open) loadAudio().catch(error => notice(error.message));
-    });
-    return;
-  }
   if (step === 2) {
     const candidates = sampleSuggestion?.status === "not_identified";
     const count = analysis.master.locate.sample_occurrences.length;
@@ -210,18 +198,15 @@ function render() {
       ? count
         ? `${count} possible passages were found. Explore their timestamps and estimated instruments below. These are candidates to review, not confirmed recording matches.`
         : "The analysis has not located a paired recording match. Any available timing estimates are shown below; original-track positions may be unknown."
+      : sampleFlow ? "Explore the located timestamps and instrument evidence. Times remain estimates; uncertain endings are marked ≈."
       : "Accept the moments you hear, or unlock the table to correct them. Original-track times may be unavailable for fallback estimates.";
-    const reviewHelp = forms.publishing
+    const reviewHelp = sampleFlow
+      ? "Review the located moments below, then open your prefilled Nature of Use. You can adjust the draft on the next screen."
+      : forms.publishing
       ? 'Used the original audio without recording a separate replay? Confirm the recording sample, accept its times, and choose “No separate replay or re-sung part” below. You do not need timestamps for a use that did not happen.'
       : "Listen and explore the results first. To continue to a draft, use the review controls below to keep or correct the passages you used.";
     frame(
-      `<h1>${heading}</h1><p class="muted">${guidance}</p><p class="muted">${reviewHelp}</p><div class="grid"><div><h3>The original</h3><audio controls id="originalPlayer"></audio></div><div><h3>Your track</h3><audio controls id="newPlayer"></audio></div></div>${candidates ? analysisDetails() : (analysis.warnings || []).map((w) => `<p class="warning">${esc(w)}</p>`).join("")}<details><summary>See how the tracks compare</summary><div id="spectral"></div></details>${renderLoopGroups()}${Object.keys(
-        forms,
-      )
-        .map((r) => renderTimes(r))
-        .join(
-          "",
-        )}<section id="instruments" aria-label="Instrument check">${renderInstruments()}</section>${nav("Next: Describe the sound →")}`,
+      `<h1>${heading}</h1><p class="muted">${guidance}</p><p class="muted">${reviewHelp}</p><div class="grid"><div><h3>The original</h3><audio controls id="originalPlayer"></audio></div><div><h3>Your track</h3><audio controls id="newPlayer"></audio></div></div>${candidates ? analysisDetails() : (analysis.warnings || []).map((w) => `<p class="warning">${esc(w)}</p>`).join("")}<details><summary>See how the tracks compare</summary><div id="spectral"></div></details>${renderLoopGroups()}${sampleFlow ? `<div class="track" data-rights="master"><h2>Your recording sample</h2>${sampleTimeTable()}</div>` : Object.keys(forms).map(r => renderTimes(r)).join("")}<section id="instruments" aria-label="Instrument check">${renderInstruments()}</section>${nav("Nature of Use →")}`,
     );
     loadAudio().catch((e) => notice(e.message));
     $("#spectral").parentElement.addEventListener("toggle", (e) => {
@@ -229,61 +214,100 @@ function render() {
     });
     return;
   }
-  if (step === 3) {
-    frame(
-      `<h1>What did you use?</h1><p class="muted">Sound, method, repetition and placement are suggested where the evidence supports them. Check the suggestions. Tell us the musical role and any reused lyrics; those cannot be established from stem labels alone.</p>${active()
-        .map(
-          (r) =>
-            `<div class="track" data-rights="${r}"><h2>${name(r)}</h2>${field("What did you take?", "element", forms[r].element, "A bassline, vocal phrase or drum break")}${field("How did you use it?", "method", forms[r].method)}${field("Does it loop or repeat?", "repetition", forms[r].repetition)}${field("What does it do in your track?", "role", forms[r].role, "Main hook, rhythm bed, background texture…")}${field("Any reused lyrics? (optional)", "lyrics", forms[r].lyrics)}</div>`,
-        )
-        .join("")}${nav("Next: Place the sample →")}`,
-    );
-    return;
-  }
-  if (step === 4) {
-    if (sampleFlow) {
-      const f = forms.master;
-      const sections = ["matched passages", "whole track", "intro", "verse", "chorus", "bridge", "outro"];
-      frame(`<h1>Does this placement look right?</h1><p class="muted">We’ve suggested where the sample appears. Confirm the placement or edit it. “Matched passages” keeps the detected locations without guessing verse or chorus names.</p>
-        <div class="track" data-rights="master"><div class="checks">${sections.map(s => `<label><input type="checkbox" data-section="${s}" ${f.sections.includes(s) ? "checked" : ""}>${s}</label>`).join("")}</div>
-        <label>Where does it appear overall?<select data-field="placement">${Object.entries(placements).map(([key, label]) => `<option value="${key}" ${f.placement === key ? "selected" : ""}>${label}</option>`).join("")}</select></label></div>${nav("Confirm placement & review draft →")}`);
-      return;
-    }
-    frame(
-      `<h1>Where does it fit?</h1><p class="muted">Review the suggested placement. Timestamps alone cannot distinguish a chorus from a verse or bridge—choose the sections you hear.</p>${active()
-        .map(
-          (r) =>
-            `<div class="track" data-rights="${r}"><h2>${name(r)}</h2><div class="checks">${["whole track", "intro", "verse", "chorus", "bridge", "outro"].map((s) => `<label><input type="checkbox" data-section="${s}" ${forms[r].sections.includes(s) ? "checked" : ""}>${s}</label>`).join("")}</div><label>Where does it appear overall?<select data-field="placement"><option value="">Choose placement</option>${Object.entries(
-              placements,
-            )
-              .map(
-                ([k, v]) =>
-                  `<option value="${k}" ${forms[r].placement === k ? "selected" : ""}>${v}</option>`,
-              )
-              .join(
-                "",
-              )}</select></label>${!forms[r].times_confirmed ? renderTimes(r, true) : ""}<label><input type="checkbox" data-field="details_confirmed" ${forms[r].details_confirmed ? "checked" : ""}>I’ve listened and checked these details</label></div>`,
-        )
-        .join("")}${nav("Next: Review your draft →")}`,
-    );
-    return;
-  }
-  if (step === 5) {
-    frame(
-      `<h1>Make it yours.</h1><p class="muted">Read the draft, make any edits, then mark it as reviewed.</p><label>Edit your Nature of Use draft<textarea data-global="narrative" rows="9">${esc(narrative)}</textarea></label>${field("Your name / reviewer", "reviewer", reviewer)}<label>Anything still to check? (optional)<textarea data-global="notes">${esc(notes)}</textarea></label><div class="actions">${button("Save draft", "save")}${button("Mark document as reviewed", "approve", true)}</div>${approved ? "<p>Reviewed and ready to download.</p>" : ""}${nav("Next: Your Nature of Use →")}`,
-    );
-    if (analysis.review.previous_narrative) {
-      const previous = document.createElement("details");
-      previous.innerHTML = '<summary>Earlier draft wording</summary><p>The draft was updated to match your current answers. Your earlier wording is kept here.</p><pre class="document"></pre>';
-      previous.querySelector("pre").textContent = analysis.review.previous_narrative;
-      $("#view").append(previous);
-    }
-    return;
-  }
-  frame(
-    `<h1>Your Nature of Use.</h1><p class="muted">A clear account of what you took and how you used it.</p><article class="document">${esc(narrative)}</article><div class="actions">${button("Download HTML", "html", true)}${button("Download text", "text")}</div><details><summary>Supporting analysis</summary>${button("Download analysis JSON", "json")}</details>${nav("Finish")}`,
-  );
+  if (step === 5) renderDraft();
 }
+function renderDraft() {
+  frame(`<h1>Your Nature of Use.</h1><p class="muted">Drafted from your sample table. Read it first, then adjust any of the preset details below. Confirm the finished document when it looks right.</p>
+    <p id="draftStatus" role="status"></p><article class="document" id="draftDocument">${esc(draftDocument || "Preparing your Nature of Use…")}</article>
+    <section id="draftControls"><h2>Adjust your Nature of Use</h2><p class="muted">These details are already filled in. Changes update the draft above. Instrument estimates and timing-based suggestions remain editable; lyrics have not been transcribed.</p>
+    ${active().map(r => { const f = forms[r]; const proposal = draftProposals[r]; return `<div class="track" data-rights="${r}"><h3>${name(r)}</h3><div class="grid">${[
+      ["What did you take?", "element"], ["How did you use it?", "method"], ["Does it loop or repeat?", "repetition"], ["What does it do in your track?", "role"], ["Any reused lyrics? (optional)", "lyrics"],
+    ].map(([label, key]) => `<div>${field(label, key, f[key])}<small data-proposal-note="${key}">${esc(proposal?.notes[key] || "")}</small></div>`).join("")}
+      <label>Where does it appear overall?<select data-field="placement">${!f.placement ? '<option value="">Choose placement</option>' : ""}${Object.entries(placements).map(([key, label]) => `<option value="${key}" ${f.placement === key ? "selected" : ""}>${label}</option>`).join("")}</select></label></div>
+      <div class="checks">${["matched passages", "whole track", "intro", "verse", "chorus", "bridge", "outro"].map(s => `<label><input type="checkbox" data-section="${s}" ${f.sections.includes(s) ? "checked" : ""}>${s}</label>`).join("")}</div></div>`; }).join("")}
+      <details><summary>Edit the wording</summary><label>Edit your Nature of Use draft<textarea data-global="narrative" rows="9">${esc(narrative)}</textarea></label><small>Changing a preset regenerates the draft. Your earlier custom wording is kept below.</small></details>
+      <details id="previousWording" ${previousNarrative ? "" : "hidden"}><summary>Earlier draft wording</summary><pre class="document">${esc(previousNarrative)}</pre></details>
+      ${field("Your name / reviewer", "reviewer", reviewer)}<label>Anything still to check? (optional)<textarea data-global="notes">${esc(notes)}</textarea></label>
+      <div class="actions">${button("Save draft", "save")}${button("Confirm Nature of Use", "approve", true)}</div>
+      <p id="reviewStatus">${approved ? "Reviewed and ready to download." : "Draft — not yet confirmed."}</p>
+      <div class="actions">${button("Download HTML", "html")}${button("Download text", "text")}</div>
+      <details><summary>Supporting analysis</summary>${button("Download analysis JSON", "json")}</details>
+    </section><div class="stepNav">${button("← Back to table", "back")}${button("New Sample", "new")}</div>`);
+  updateDraftStatus();
+}
+function updateDraftStatus() {
+  if (step !== 5) return;
+  $("#draftStatus").textContent = draftError || (draftBusy ? "Updating your draft…" : "Draft matches the current details below.");
+  $("#draftDocument").setAttribute("aria-busy", String(draftBusy));
+  $("#reviewStatus").textContent = approved ? "Reviewed and ready to download." : "Draft — not yet confirmed.";
+  for (const action of ["html", "text"])
+    $(`[data-action="${action}"]`).disabled = !approved || draftBusy || !!draftError;
+  $('[data-action="approve"]').disabled = draftBusy || !!draftError;
+}
+function queueDraft({ regenerate = false } = {}) {
+  if (regenerate && narrative && narrative !== generated) {
+    previousNarrative = narrative;
+    narrative = "";
+  }
+  clearTimeout(draftTimer);
+  draftRevision++;
+  if (step !== 5) return;
+  draftBusy = true;
+  draftError = "";
+  approved = false;
+  updateDraftStatus();
+  draftTimer = setTimeout(() => refreshDraft().catch(error => notice(error.message)), 350);
+}
+async function refreshDraft({ prefill = false } = {}) {
+  clearTimeout(draftTimer);
+  const target = caseId, revision = ++draftRevision;
+  draftBusy = true;
+  draftError = "";
+  updateDraftStatus();
+  try {
+    const value = await json(`/api/analyses/${target}/draft`, {
+      method: "POST", body: JSON.stringify({ ...reviewPayload(false), prefill,
+        preserve_fields: { master: [...touchedSoundFields].filter(key => ["element", "method", "repetition", "role", "lyrics"].includes(key)).concat(touchedPlacement ? ["sections", "placement"] : []) },
+      }),
+    });
+    if (target !== caseId || revision !== draftRevision) return false;
+    if (prefill) for (const [r, answers] of Object.entries(value.paths)) {
+      for (const key of ["element", "method", "repetition", "role", "lyrics", "sections", "placement"])
+        forms[r][key] = answers[key];
+      if (r === "master") for (const key of ["element", "method", "repetition", "role", "lyrics"])
+        if (!touchedSoundFields.has(key)) autoSoundFields[key] = answers[key];
+    }
+    draftProposals = value.proposals;
+    narrative = value.narrative;
+    generated = value.generated;
+    previousNarrative = previousNarrative || value.previous_narrative || "";
+    draftDocument = approved
+      ? await (await api(`/api/analyses/${target}/export/text`)).text()
+      : value.document;
+    if (target !== caseId || revision !== draftRevision) return false;
+    draftInitialized = true;
+    if (step === 5) {
+      $("#draftDocument").textContent = draftDocument;
+      $('[data-global="narrative"]').value = narrative;
+      $("#previousWording").hidden = !previousNarrative;
+      $("#previousWording pre").textContent = previousNarrative;
+      document.querySelectorAll("[data-proposal-note]").forEach(note => {
+        note.textContent = draftProposals[note.closest("[data-rights]").dataset.rights]?.notes[note.dataset.proposalNote] || "";
+      });
+    }
+    return true;
+  } catch (error) {
+    if (target !== caseId || revision !== draftRevision) return false;
+    draftError = "The draft could not update. Your edits are kept; use Save draft to retry.";
+    throw error;
+  } finally {
+    if (target === caseId && revision === draftRevision) {
+      draftBusy = false;
+      updateDraftStatus();
+    }
+  }
+}
+
 function analysisDetails() {
   const checks = sampleSuggestion?.checks;
   const states = { completed: "Completed", unavailable: "Unavailable", not_run: "Did not run", unknown: "Not recorded" };
@@ -294,12 +318,6 @@ function analysisDetails() {
     <p>Replayed melodies (interpolations) are not yet assessed automatically. An unconfirmed recording match does not rule out musical reuse.</p>
     ${(analysis.warnings || []).map(w => `<p class="muted">${esc(w)}</p>`).join("")}
     <p>Analysis ID: ${esc(caseId)}</p>${button("Download analysis details", "json")}</details>`;
-}
-function sampleEvidence() {
-  return `<details id="sampleEvidence"><summary>Sample matches and instruments</summary><p class="muted">Automatically located matches. Times remain estimates; uncertain endings are marked ≈.</p>
-    <div class="grid"><div><h3>The original</h3><audio controls id="originalPlayer"></audio></div><div><h3>Your track</h3><audio controls id="newPlayer"></audio></div></div>
-    <div class="track" data-rights="master">${sampleTimeTable()}
-    <section id="instruments" aria-label="Instrument check">${renderInstruments()}</section></div></details>`;
 }
 function sampleTimeTable() {
   const f = forms.master;
@@ -400,16 +418,24 @@ function instrumentTable() {
 function applyInstrumentPrefill() {
   const f = forms.master;
   if (!f || f.status === "no_use") return;
-  if (sampleFlow && f.description_confirmed) return;
+  if (f.description_confirmed) return;
   const labels = [
     ...new Set(
       f.intervals.flatMap((i) => {
         const row = instrumentRow(i);
-        return row?.status === "checked" ? row.suggested_instruments || [] : [];
+        return row?.status === "checked" && !row.context_only ? row.suggested_instruments || [] : [];
       }),
     ),
   ];
-  const suggestions = sampleFlow ? sampleSuggestion?.description || {} : { element: labels.join(", ") };
+  const sourceLabels = [...new Set(f.intervals.flatMap(i => {
+    const row = instrumentRow(i);
+    return row?.status === "checked" ? (row.source_sounds || []).filter(s => s.scope === "sample").map(s => s.instrument) : [];
+  }))];
+  const suggestions = sampleFlow ? sampleSuggestion?.description || {} : {
+    element: labels.length ? labels.join(", ") : sourceLabels.length
+      ? "Sampled passage; source sounds include " + sourceLabels.join(", ").toLowerCase()
+      : "Sampled passage — instrument not identified",
+  };
   if (!sampleFlow && labels.length) suggestions.method = "Sampled the original recording";
   for (const [field, value] of Object.entries(suggestions)) {
     if (
@@ -482,7 +508,8 @@ async function startInstrumentCheck() {
         throw Error(
           "Listen and confirm your edited timestamps before checking their instruments.",
         );
-      if (!(await save())) return;
+      // The new check has not been queued yet; save its edited times first.
+      if (!(await save(false, { waitForInstruments: false }))) return;
     }
     if (serial !== polling || target !== caseId) return;
     await json(`/api/analyses/${target}/stems`, { method: "POST" });
@@ -623,7 +650,7 @@ async function poll({ instruments = false } = {}) {
           analysisPending = true;
           instrumentBusy = true;
           instrumentMessage = "Finishing the initial instrument comparisons…";
-          if (!previewShown) { step = 3; render(); }
+          if (!previewShown) { step = 2; render(); }
           else updateInstruments();
           previewShown = true;
           previewVersion = state.result_version;
@@ -657,11 +684,11 @@ async function poll({ instruments = false } = {}) {
             : "";
           if (instruments) updateInstruments();
           else {
-            step = sampleFlow ? 3 : 2;
+            step = 2;
             render();
           }
         } else {
-          step = sampleFlow ? 3 : 2;
+          step = 2;
           render();
         }
         return;
@@ -755,7 +782,6 @@ async function loadResult({
     for (const r of analysis.input.analysis_scope) {
       const path = corrected?.[r];
       const suggestion = data.suggestions[r];
-      const values = suggestion.placement.values;
       if (r === "master" && path)
         ["element", "method"].forEach((field) => touchedSoundFields.add(field));
       forms[r] = {
@@ -781,16 +807,11 @@ async function loadResult({
           path?.describe.elements.find((x) => x.feature === "lyrics")?.value ||
           "",
         method:
-          path?.describe.reuse_type ||
-          (suggestion.intervals.length
-            ? r === "master"
-              ? "Sampled the original recording"
-              : "Replayed or re-sang the original music"
-            : ""),
-        repetition: path?.describe.repetition || values.repetition || "",
+          path?.describe.reuse_type || "",
+        repetition: path?.describe.repetition || "",
         role: path?.describe.role_in_new_song || "",
-        sections: path?.describe.sections || values.sections || [],
-        placement: path?.classification.placement || values.placement || null,
+        sections: path?.describe.sections || [],
+        placement: path?.classification.placement || null,
         edit: false,
       };
     }
@@ -812,13 +833,44 @@ async function loadResult({
     }
   }
   if (corrected && !preserveReview) {
+    touchedPlacement = true;
     narrative = corrected.nature_of_use.text;
     generated = analysis.review.generated_narrative || "";
     reviewer = analysis.review.reviewer || user.displayName || "";
     notes = analysis.review.notes || "";
     approved = analysis.review.status === "approved";
+    previousNarrative = analysis.review.previous_narrative || "";
+    const saved = analysis.review.description_answers;
+    if (saved && Object.keys(saved).length) {
+      Object.assign(forms.master, saved);
+      Object.keys(saved).forEach(key => touchedSoundFields.add(key));
+      draftInitialized = true;
+    }
   }
+  if (step === 5 && preserveReview) queueDraft();
   return true;
+}
+function tableTimesChanged(r) {
+  approved = false;
+  draftInitialized = false;
+  if (r === "master") {
+    const f = forms[r];
+    f.description_confirmed = false;
+    for (const key of ["element", "repetition", "role"])
+      if (!touchedSoundFields.has(key)) f[key] = "";
+    if (!touchedPlacement) { f.sections = []; f.placement = null; }
+  }
+  queueDraft({ regenerate: true });
+}
+function updatePlacementControls(r) {
+  const track = $(`[data-rights="${r}"]`), form = forms[r];
+  if (step !== 5 || !track) { render(); return; }
+  track.querySelectorAll("[data-section]").forEach(input => { input.checked = form.sections.includes(input.dataset.section); });
+  const select = track.querySelector('[data-field="placement"]');
+  if (!form.placement && !select.querySelector('option[value=""]'))
+    select.insertAdjacentHTML("afterbegin", '<option value="">Choose placement</option>');
+  select.value = form.placement || "";
+  track.querySelector('[data-field="repetition"]').value = form.repetition;
 }
 function validTimes(f) {
   return (
@@ -842,12 +894,7 @@ function validTimes(f) {
 }
 function gate() {
   if (sampleFlow) {
-    if (step === 3 && (sampleSuggestion?.status !== "identified" ||
-      ["element", "method", "repetition", "role"].some(key => !forms.master[key]?.trim())))
-      throw Error("Review the prefilled sound, method, repetition and role before confirming.");
-    if (step === 4 && (!forms.master.sections.length || !forms.master.placement))
-      throw Error("Choose a placement, or keep the suggested matched passages.");
-    if (step === 5 && !approved) throw Error("Mark the document as reviewed before downloading.");
+    if (sampleSuggestion?.status !== "identified") throw Error("The sample results are still loading.");
     return;
   }
   if (step === 2) {
@@ -879,46 +926,12 @@ function gate() {
           .join(" "),
       );
   }
-  if (
-    step === 3 &&
-    active().some((r) =>
-      ["element", "method", "repetition", "role"].some(
-        (k) => !forms[r][k].trim(),
-      ),
-    )
-  )
-    throw Error(
-      "Describe the sound, method, repetition and role for each applicable use.",
-    );
-  if (
-    step === 4 &&
-    active().some(
-      (r) =>
-        !validTimes(forms[r]) ||
-        !forms[r].sections.length ||
-        !forms[r].placement ||
-        !forms[r].details_confirmed,
-    )
-  )
-    throw Error(
-      "Confirm the times, song sections, placement and listening details before reviewing.",
-    );
-  if (step === 5 && !approved)
-    throw Error("Mark the document as reviewed before downloading.");
 }
-async function save(approve = false) {
-  const target = caseId;
-  if (sampleFlow && instrumentBusy) {
-    notice("Your answers are kept. Finishing the instrument check before saving your draft…");
-    while (instrumentBusy && target === caseId && user && !analysisError)
-      await new Promise(resolve => setTimeout(resolve, 250));
-    if (target !== caseId || !user) return false;
-    if (analysisError) throw Error(analysisError);
-    notice("");
-  }
-  const serial = polling;
-  const payload = {
+
+function reviewPayload(approve = false) {
+  return {
     workflow: sampleFlow ? "sample" : "classic",
+    description_initialized: draftInitialized,
     paths: Object.fromEntries(
       Object.entries(forms).map(([r, f]) => [
         r,
@@ -946,7 +959,7 @@ async function save(approve = false) {
                   source: "creator_review",
                   ending_review_context: i.end_review ?? i.ending_review_context ?? null,
                 }))
-              : f[k],
+              : k === "details_confirmed" ? approve : f[k],
           ]),
         ),
       ]),
@@ -956,12 +969,31 @@ async function save(approve = false) {
     notes,
     approve,
   };
+}
+async function save(approve = false, { waitForInstruments = true } = {}) {
+  const target = caseId;
+  if (waitForInstruments && instrumentBusy) {
+    notice("Your answers are kept. Finishing the instrument check before saving your draft…");
+    while (instrumentBusy && target === caseId && user && !analysisError)
+      await new Promise(resolve => setTimeout(resolve, 250));
+    if (target !== caseId || !user) return false;
+    if (analysisError) throw Error(analysisError);
+    notice("");
+  }
+  if (analysisError) throw Error(analysisError);
+  // A finishing instrument job may have queued a newer preview while save waited.
+  // Flush it before capturing the revision being persisted.
+  if (step === 5 && !(await refreshDraft())) return false;
+  const serial = polling;
+  const revision = draftRevision;
+  const payload = reviewPayload(approve);
   const value = await json(`/api/analyses/${target}/review`, {
     method: "PUT",
     body: JSON.stringify(payload),
   });
-  if (target !== caseId || serial !== polling) return false;
+  if (target !== caseId || serial !== polling || revision !== draftRevision) return false;
   analysis = value.analysis;
+  draftDocument = value.document;
   narrative = analysis.review.corrected.nature_of_use.text;
   generated = analysis.review.generated_narrative || (!payload.narrative ? narrative : generated);
   for (const [rights, form] of Object.entries(forms)) {
@@ -971,6 +1003,7 @@ async function save(approve = false) {
     form.repetition = path.describe.repetition || "";
   }
   approved = analysis.review.status === "approved";
+  if (approve) for (const form of Object.values(forms)) form.description_confirmed = true;
   return true;
 }
 async function download(kind) {
@@ -1013,6 +1046,7 @@ $("#view").addEventListener("input", (e) => {
   if (r && el.dataset.interval) {
     const [n, k] = el.dataset.interval.split(":");
     forms[r].intervals[n][k] = el.value === "" ? null : Number(el.value);
+    tableTimesChanged(r);
     forms[r].times_confirmed = false;
     forms[r].details_confirmed = false;
     const track = el.closest(".track");
@@ -1025,6 +1059,8 @@ $("#view").addEventListener("input", (e) => {
       updateInstruments();
     }
   }
+  if (el.dataset.global || el.dataset.field === "reviewer" || (r && el.dataset.field))
+    queueDraft({ regenerate: !!r && !!el.dataset.field });
 });
 $("#view").addEventListener("change", (e) => {
   const el = e.target,
@@ -1043,6 +1079,8 @@ $("#view").addEventListener("change", (e) => {
   if (r && el.dataset.field === "status") {
     forms[r].status = el.value;
     forms[r].details_confirmed = el.value === "no_use";
+    approved = false;
+    queueDraft({ regenerate: true });
     render();
   }
   if (r && el.dataset.field === "placement") {
@@ -1056,13 +1094,16 @@ $("#view").addEventListener("change", (e) => {
     form.details_confirmed = false;
     touchedPlacement = true;
     approved = false;
-    render();
+    queueDraft({ regenerate: true });
+    updatePlacementControls(r);
   }
   if (el.dataset.times) {
     const f = forms[el.dataset.times];
     f.edit = el.value === "edit";
     f.times_confirmed = el.value === "accept";
     if (f.times_confirmed) f.status = "confirmed";
+    approved = false;
+    queueDraft({ regenerate: true });
     render();
   }
   if (r && el.dataset.section) {
@@ -1075,7 +1116,7 @@ $("#view").addEventListener("change", (e) => {
       forms[r].sections = ["whole track"];
     else if (el.dataset.section !== "whole track" && el.checked)
       forms[r].sections = forms[r].sections.filter((x) => x !== "whole track");
-    if (sampleFlow && el.checked) forms[r].sections = el.dataset.section === "matched passages"
+    if (el.checked) forms[r].sections = el.dataset.section === "matched passages"
       ? ["matched passages"] : forms[r].sections.filter(x => x !== "matched passages");
     const joined = forms[r].sections.sort().join(",");
     forms[r].placement =
@@ -1090,7 +1131,8 @@ $("#view").addEventListener("change", (e) => {
         "chorus,intro,outro": "intro_outro_with_chorus",
       }[joined] || (forms[r].sections.length ? "selected_sections" : null);
     forms[r].details_confirmed = false;
-    render();
+    queueDraft({ regenerate: true });
+    updatePlacementControls(r);
   }
 });
 $("#view").addEventListener("click", async (e) => {
@@ -1099,6 +1141,7 @@ $("#view").addEventListener("click", async (e) => {
   const r = el.closest("[data-rights]")?.dataset.rights;
   if (el.dataset.remove && r) {
     forms[r].intervals.splice(Number(el.dataset.remove), 1);
+    tableTimesChanged(r);
     forms[r].times_confirmed = false;
     forms[r].details_confirmed = false;
     approved = false;
@@ -1117,26 +1160,18 @@ $("#view").addEventListener("click", async (e) => {
     } else if (action === "new") reset();
     else if (action === "analyze") await analyze();
     else if (action === "back") {
-      step--;
+      clearTimeout(draftTimer);
+      draftRevision++;
+      step = 2;
       render();
     } else if (action === "next") {
       gate();
-      if (sampleFlow && step === 3) {
-        forms.master.description_confirmed = true;
-        ["element", "method", "repetition", "role", "lyrics"].forEach(field => touchedSoundFields.add(field));
-      }
-      if (sampleFlow && step === 4) forms.master.details_confirmed = true;
-      if (step === 4) {
-        el.disabled = true;
-        try { if (!(await save())) return; }
-        finally { if (el.isConnected) el.disabled = false; }
-      }
-      if (step === 6) {
-        reset();
-        return;
-      }
-      step++;
-      render();
+      el.disabled = true;
+      try {
+        if (!(await refreshDraft({ prefill: !draftInitialized }))) return;
+        step = 5;
+        render();
+      } finally { if (el.isConnected) el.disabled = false; }
     } else if (action === "add" && r) {
       forms[r].intervals.push({
         new_start: null,
@@ -1145,15 +1180,15 @@ $("#view").addEventListener("click", async (e) => {
         original_end: null,
       });
       forms[r].times_confirmed = false;
+      tableTimesChanged(r);
       render();
     } else if (action === "save" || action === "approve") {
-      await save(action === "approve");
-      render();
-      notice(
-        action === "approve"
-          ? "Reviewed and ready to download."
-          : "Draft saved.",
-      );
+      el.disabled = true;
+      try {
+        if (!(await save(action === "approve"))) return;
+        render();
+        notice(approved ? "Reviewed and ready to download." : "Draft saved.");
+      } finally { if (el.isConnected) el.disabled = false; }
     } else if (action === "stems") {
       await startInstrumentCheck();
     } else if (["html", "text", "json"].includes(action))

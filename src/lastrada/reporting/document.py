@@ -126,7 +126,8 @@ def document_text(analysis: Analysis):
             ["Still needed to complete this document"] + [f"• {item}" for item in missing] + [""]
         )
     if analysis.review.reviewer:
-        lines.append(f"Reviewed by: {analysis.review.reviewer}")
+        label = "Reviewed by" if analysis.review.status == "approved" else "Reviewer"
+        lines.append(f"{label}: {analysis.review.reviewer}")
     if analysis.review.notes:
         lines.append(f"Review notes: {analysis.review.notes}")
     lines += [

@@ -56,11 +56,53 @@ class UseReview(Payload):
 
 class ReviewPayload(Payload):
     workflow: Literal["classic", "sample"] = "classic"
+    description_initialized: bool = False
     paths: dict[Literal["master", "publishing"], UseReview]
     narrative: str = Field(default="", max_length=20000)
     reviewer: str = Field(default="", max_length=200)
     notes: str = Field(default="", max_length=4000)
     approve: bool = False
+
+
+class DraftPayload(ReviewPayload):
+    prefill: bool = False
+    preserve_fields: dict[Literal["master", "publishing"], list[Literal[
+        "element", "method", "repetition", "role", "lyrics", "sections", "placement"
+    ]]] = Field(default_factory=dict)
+
+
+def draft_preview(analysis: Analysis, payload: DraftPayload, model_name=None):
+    """Generate the same document as export, without saving or approving it."""
+    from lastrada.reporting.document import document_text
+    from lastrada.reporting.sample_flow import description_proposal, sample_intervals
+
+    review = ReviewPayload.model_validate(payload.model_dump(exclude={"prefill", "preserve_fields"}))
+    review.approve = False
+    proposals = {}
+    for rights, answer in review.paths.items():
+        answer.details_confirmed = False
+        intervals = sample_intervals(analysis) if review.workflow == "sample" else answer.intervals
+        proposal = description_proposal(analysis, intervals, model_name, rights)
+        proposals[rights] = proposal
+        if payload.prefill and answer.status != "no_use":
+            preserved = payload.preserve_fields.get(rights, [])
+            for field, value in proposal["description"].items():
+                if field not in preserved and not getattr(answer, field):
+                    setattr(answer, field, value)
+            values = proposal["placement"]["values"]
+            if "sections" not in preserved and not answer.sections:
+                answer.sections = values["sections"]
+            if "placement" not in preserved and not answer.placement:
+                answer.placement = Placement(values["placement"])
+    result = apply_review(analysis, review)
+    return {
+        "paths": {r: a.model_dump(mode="json") for r, a in review.paths.items()},
+        "proposals": proposals,
+        "narrative": result.review.corrected["nature_of_use"]["text"],
+        "generated": result.review.generated_narrative,
+        "previous_narrative": result.review.previous_narrative,
+        "document": document_text(result),
+    }
 
 
 def apply_review(analysis: Analysis, payload: ReviewPayload):
@@ -138,7 +180,7 @@ def apply_review(analysis: Analysis, payload: ReviewPayload):
                 if answer.element.strip()
                 else []
             )
-            if answer.lyrics.strip() and (not sample or answer.lyrics.strip() != LYRICS_UNASSESSED):
+            if answer.lyrics.strip() and answer.lyrics.strip() != LYRICS_UNASSESSED:
                 path.describe.elements.append(
                     Feature(
                         feature="lyrics",
@@ -150,7 +192,7 @@ def apply_review(analysis: Analysis, payload: ReviewPayload):
                         review_required=not answer.details_confirmed,
                     )
                 )
-            elif sample:
+            else:
                 path.describe.limitations.append("Reused lyrics have not been assessed.")
             if sample and has_partial_matches(detected):
                 path.describe.limitations.append(PARTIAL_USE_NOTE)
@@ -205,7 +247,7 @@ def apply_review(analysis: Analysis, payload: ReviewPayload):
         notes=payload.notes,
         workflow=payload.workflow,
     )
-    if sample:
+    if "master" in payload.paths and (sample or payload.description_initialized):
         result.review.description_answers = {
             field: getattr(payload.paths["master"], field)
             for field in ("element", "method", "repetition", "role", "lyrics")

@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 from lastrada.schemas.models import Analysis, Intake, Work, Interval
 from lastrada.reporting.suggestions import suggested_intervals, placement_proposal
-from lastrada.web.domain import ReviewPayload, apply_review
+from lastrada.web.domain import ReviewPayload, DraftPayload, apply_review, draft_preview
 from lastrada.reporting.document import document_html, document_text
 from lastrada.separation.occurrences import occurrence_rows, instrument_prefill
 from lastrada.reporting.loop_groups import group_loop_families, loop_family_rows
@@ -30,7 +30,7 @@ def initial():
         analysis.input.analysis_scope = ["master"]
         analysis.master.locate.sample_occurrences = [Interval(
             new_start=8, new_end=12, original_start=2, original_end=6,
-            source="sampleid_rank_sequence" if sample_scenario in {"no_match", "matcher_unavailable", "verification_incomplete", "candidate_table"} else "direct_waveform_local_alignment",
+            source="sampleid_rank_sequence" if sample_scenario in {"no_match", "matcher_unavailable", "verification_incomplete", "candidate_table", "table_edits"} else "direct_waveform_local_alignment",
             status="candidate", end_review={"new_through": 12.5, "original_through": 6.5},
         )]
         if sample_scenario == "automatic_subset":
@@ -133,6 +133,8 @@ if __name__ == "__main__":
         analysis = Analysis.model_validate(body["analysis"])
         if mode == "sample":
             print(json.dumps(sample_review(analysis, PROFILE["stem_model"])))
+        elif mode == "draft":
+            print(json.dumps(draft_preview(analysis, DraftPayload.model_validate(body["payload"]), PROFILE["stem_model"])))
         elif mode == "review":
             print(
                 apply_review(

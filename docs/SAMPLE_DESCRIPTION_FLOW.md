@@ -1,51 +1,52 @@
-# Prefilled recording-sample flow
+# Table to Nature of Use
 
-Supported recording matches in the Firebase interface on `local/stem-fast` use six steps: tracks, finding
-the sample, describing the sound, placement, draft review, and download.
-Supported recording matches go directly to **Does this describe your sample?**
-There is no separate timestamp confirmation or replay/re-singing question.
-When automatic recording identification is unresolved, the app opens the earlier
-seven-step review flow at the timestamp and instrument table. Available candidates
-and timing-only fallback estimates remain visible, with playback, repeated-passage
-groups, automatic instrument checks and downloadable analysis details. No recording
-match is required merely to view the results. To make a document from these
-unconfirmed candidates, the creator can keep or edit times using the earlier review
-controls and continue through description, placement and draft review. Inspection
-and instrument checks do not approve a candidate or save a confirmed review.
-Completed classic reviews retain that flow on reload. The Streamlit interface and
-classic review API remain compatible.
+The Firebase interface on `local/stem-fast` has four stages: tracks, analysis,
+timestamp/instrument table, and **Nature of Use**. The table's **Nature of Use**
+button opens the complete drafted document immediately, with preset editing
+controls underneath. There are no intervening sound-description, placement, or
+separate download screens. Confirmation and downloads live on this same page.
 
-## Prefill and confirmation
+Both automatically identified samples and unresolved candidates have a table.
+Supported automatic matches retain their estimated timing provenance. Unresolved
+candidates keep the earlier accept/edit controls: merely viewing the table does
+not confirm a recording match. Previously saved classic reviews remain compatible.
+The Streamlit workflow is unchanged.
 
-All five sound answers contain editable values. Instrument descriptions use
-current-model, current-version evidence for the matched moments. Unidentified
-instruments stay explicitly unresolved. Sample-level source sound estimates are
-identified as source sounds; surrounding-context estimates are not presented as
-sampled instruments. Checked portions remain available per occurrence.
+## Presets, editing, and confirmation
 
-Method and repetition are suggested from the recording match and timing pattern.
-Musical role is a proposal to confirm or change, not an instrument-model finding.
-Lyrics are prefilled as **Not assessed — add any reused lyrics**: there is no
-transcription model, and this value is not saved as verified lyrics or a claim
-that no lyrics were used. An unchanged or empty lyrics answer produces an export
-limitation. Generic **matched passages** supplies a placement answer without
-inventing verse or chorus names; timing-based intro/outro/throughout proposals
-remain editable.
+The draft uses the selected table intervals and current instrument evidence.
+Sound, method, repetition, musical role, placement, and lyrics have editable
+presets. Unknown instruments remain explicit, and source-presence estimates are
+not relabeled as verified sampled instruments. Generic **matched passages** avoids
+inventing verse or chorus names. Roles and placement inferred from timing are
+proposals; lyrics are **Not assessed — add any reused lyrics**, never invented text
+or a claim that no lyrics were used.
 
-The primary actions explicitly confirm the description and then the placement.
-Automatic instrument checks can update untouched answers while the description
-is open. Deliberate edits, empty lyrics, and confirmed descriptions survive later
-results and reloads. If an instrument job is already running, saving waits for
-it with a visible message; no extra confirmation is needed after it finishes.
-The final document still requires explicit review before export.
+The complete document comes first. Controls underneath update it in place using
+`POST /api/analyses/{id}/draft`, a private, read-only preview of the same generator
+used for exports. It does not queue inference, consume an analysis operation,
+save a review, or approve a description. Initial presets use the actual selected
+intervals, including timestamp corrections. Later deliberate edits and cleared
+fields are retained. An older preview response cannot replace newer inputs.
 
-The optional **Sample matches and instruments** panel contains read-only timings,
-playback, per-moment evidence, and ending uncertainty. It is not a required step.
+Changing placement also updates the section selections and narrative: **intro and
+outro** cannot leave **throughout the track** in generated wording. A custom wording
+editor is optional. Changing a preset regenerates the text and retains earlier
+custom wording on the page. **Save draft** persists an unapproved draft;
+**Confirm Nature of Use** approves the displayed details before enabling HTML/text
+downloads. Further edits disable downloads until the revised document is confirmed.
+
+The user can open a draft while initial instrument checks finish. Untouched
+instrument defaults update with new evidence; deliberate edits remain intact.
+Saving waits for a running job so it cannot overwrite the worker's result.
+Preview failures keep edits and disable confirmation until a successful retry.
+Saved descriptions and intentional empty lyrics survive reload, and the table
+remains accessible through **Back to table**.
 
 ## Evidence and saved records
 
 The server owns automatic times. Paired direct-waveform, full-mix DTW, and
-stem-assisted DTW localizations qualify for the new flow. Coarse retrieval windows
+stem-assisted DTW localizations qualify for automatically estimated times. Coarse retrieval windows
 and PF-NMF activity alone do not qualify as automatically identified samples.
 They remain available in the review table. Its expandable diagnostics explain
 whether recording matching was unavailable, instrument verification was
@@ -87,8 +88,7 @@ previously reviewed timings and explicit composition reviews are preserved;
 unreviewed composition paths are marked not requested in the new corrected
 document, not declared absent. `workflow` defaults to `classic` for old records
 and callers. Exact description answers are saved separately so a deliberately
-cleared field is not refilled on reload. A frontend talking to an older API
-retains its classic flow until the services are updated together.
+cleared field is not refilled on reload. The direct document preview requires the API and frontend from the same release.
 
 ## Validation and limits
 
@@ -109,12 +109,12 @@ match, unavailable models, incomplete verification, diagnostic downloads, saved
 edits/reload, background instrument updates, confirming during a running check,
 and a supported subset of mixed raw candidates. A recovered bounded match is
 tested through description, review, export and reload. Existing
-classic-flow and instrument scenarios remain in the suite. API tests cover saved
+classic table and instrument scenarios remain in the suite. Draft-specific cases also cover preset edits, out-of-order preview responses, failed-preview retry, corrected table times, save/reload, and exact preview/export agreement. API tests cover saved
 analysis validation, explicit description approval and JSON/HTML/text exports.
 An unresolved 41-candidate case exercises visible tables, automatic instrument
-updates without confirmation, reload, and the full earlier review/export flow.
+updates without confirmation, reload, and direct draft generation, confirmation and export.
 The frontend change also exposes candidates from existing saved results; they
-do not need a fresh audio analysis just to reach the table.
+do not need a fresh audio analysis just to reach the table or draft.
 
 A read-only eligibility check on six older private saved song analyses found
 supported localizations in two cases (one and three intervals respectively).

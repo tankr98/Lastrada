@@ -33,7 +33,8 @@ function python(mode, body) {
     instrumentPolls = 0,
     mainPolls = 0,
     operation = "analyze",
-    jobError = null;
+    jobError = null,
+    draftFailureShown = false;
   const instrumentScenario = process.env.LASTRADA_BROWSER_STEMS;
   const endingScenario = process.env.LASTRADA_BROWSER_ENDING;
   const sampleScenario = process.env.LASTRADA_BROWSER_SAMPLE_FLOW;
@@ -231,6 +232,15 @@ function python(mode, body) {
         if (sampleScenario) data.sample_review = JSON.parse(python("sample", { analysis: data.analysis }));
         result = data;
       }
+      else if (u.pathname.endsWith("/draft")) {
+        if (sampleScenario === "draft_failure" && req.postDataJSON().paths.master.role === "Retry this preview" && !draftFailureShown) {
+          draftFailureShown = true;
+          return route.fulfill({ status: 503, headers, json: { detail: "Preview temporarily unavailable" } });
+        }
+        result = JSON.parse(python("draft", { analysis: data.analysis, payload: req.postDataJSON() }));
+        if (sampleScenario === "draft_race" && req.postDataJSON().paths.master.placement === "throughout")
+          await new Promise(resolve => setTimeout(resolve, 1500));
+      }
       else if (u.pathname.endsWith("/review")) {
         if (sampleScenario?.startsWith("early_") && job !== "completed") {
           throw Error("Description save raced with initial analysis");
@@ -243,7 +253,7 @@ function python(mode, body) {
             }),
           );
           approved = data.analysis.review.status === "approved";
-          result = { analysis: data.analysis };
+          result = { analysis: data.analysis, document: python("text", { analysis: data.analysis }) };
         } catch (e) {
           status = 400;
           result = { detail: e.message };
@@ -486,7 +496,7 @@ function python(mode, body) {
     if (endingScenario && await master.locator("[data-ending-review]").count())
       throw Error("Existing confirmation did not resolve the ending cue");
     await p
-      .getByRole("button", { name: "Next: Describe the sound →", exact: true })
+      .getByRole("button", { name: "Nature of Use →", exact: true })
       .click();
     await p.getByText(/Replayed music: choose Yes only/).waitFor();
     const alertBox = await p.locator("#notice").boundingBox();
@@ -501,7 +511,7 @@ function python(mode, body) {
     if (endingScenario)
       await master.locator("[data-ending-review-summary]").waitFor({ state: "visible" });
     await p
-      .getByRole("button", { name: "Next: Describe the sound →", exact: true })
+      .getByRole("button", { name: "Nature of Use →", exact: true })
       .click();
     await p
       .getByText(/accept the suggested times, or edit and confirm/)
@@ -658,7 +668,7 @@ function python(mode, body) {
         .check();
       await p
         .getByRole("button", {
-          name: "Next: Describe the sound →",
+          name: "Nature of Use →",
           exact: true,
         })
         .click();
@@ -668,7 +678,7 @@ function python(mode, body) {
           .inputValue()) !== "Drums"
       )
         throw Error("Edited timestamp retained stale sound prefill");
-      await p.getByRole("button", { name: "← Back", exact: true }).click();
+      await p.getByRole("button", { name: "← Back to table", exact: true }).click();
       await p
         .getByRole("button", {
           name: "Continue instrument checks",
@@ -706,7 +716,7 @@ function python(mode, body) {
       });
     }
     await p
-      .getByRole("button", { name: "Next: Describe the sound →", exact: true })
+      .getByRole("button", { name: "Nature of Use →", exact: true })
       .click();
     if (instrumentScenario === "success") {
       if (
@@ -716,14 +726,14 @@ function python(mode, body) {
       )
         throw Error("Timestamp instruments did not prefill the sound");
     }
-    if (instrumentScenario === "short_context" && await p.getByLabel("What did you take?", { exact: true }).inputValue())
+    if (instrumentScenario === "short_context" && !(await p.getByLabel("What did you take?", { exact: true }).inputValue()).includes("source sounds include"))
       throw Error("Context-only evidence must not prefill a sampled instrument");
     await p
       .getByLabel("What did you take?", { exact: true })
       .fill("A bassline");
-    await p.getByRole("button", { name: "← Back", exact: true }).click();
+    await p.getByRole("button", { name: "← Back to table", exact: true }).click();
     await p
-      .getByRole("button", { name: "Next: Describe the sound →", exact: true })
+      .getByRole("button", { name: "Nature of Use →", exact: true })
       .click();
     if (
       (await p
@@ -733,10 +743,10 @@ function python(mode, body) {
       throw Error("User sound edit was overwritten");
     if (instrumentScenario === "success") {
       await p.getByLabel("What did you take?", { exact: true }).fill("");
-      await p.getByRole("button", { name: "← Back", exact: true }).click();
+      await p.getByRole("button", { name: "← Back to table", exact: true }).click();
       await p
         .getByRole("button", {
-          name: "Next: Describe the sound →",
+          name: "Nature of Use →",
           exact: true,
         })
         .click();
@@ -753,29 +763,17 @@ function python(mode, body) {
     await p
       .getByLabel("What does it do in your track?", { exact: true })
       .fill("Main hook");
-    await p
-      .getByRole("button", { name: "Next: Place the sample →", exact: true })
-      .click();
     await p.getByLabel("whole track", { exact: true }).check();
     await p
-      .getByLabel("I’ve listened and checked these details", { exact: true })
-      .check();
-    await p
-      .getByRole("button", { name: "Next: Review your draft →", exact: true })
-      .click();
-    await p
-      .getByRole("button", { name: "Mark document as reviewed", exact: true })
+      .getByRole("button", { name: "Confirm Nature of Use", exact: true })
       .waitFor();
     await p
-      .getByRole("button", { name: "Mark document as reviewed", exact: true })
+      .getByRole("button", { name: "Confirm Nature of Use", exact: true })
       .click();
     await p
       .getByText("Reviewed and ready to download.", { exact: true })
       .first()
       .waitFor();
-    await p
-      .getByRole("button", { name: "Next: Your Nature of Use →", exact: true })
-      .click();
     await p
       .getByRole("button", { name: "Download HTML", exact: true })
       .waitFor();

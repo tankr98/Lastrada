@@ -11,7 +11,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from google.api_core.exceptions import NotFound, PreconditionFailed
-from lastrada.web.domain import CreateAnalysis, ReviewPayload, owner_key, apply_review
+from lastrada.web.domain import CreateAnalysis, ReviewPayload, DraftPayload, owner_key, apply_review, draft_preview
 from lastrada.web.cloud import Cases, Queue, prefix
 from lastrada.web.profile import PROFILE
 
@@ -292,6 +292,15 @@ def create_app(cases=None, queue=None, authenticate_user=None, mode=None):
             },
         }
 
+    @app.post("/api/analyses/{analysis_id}/draft")
+    def preview(analysis_id: UUID, body: DraftPayload, request: Request):
+        root, state, _ = read_case(request, analysis_id)
+        if state["status"] != "completed" and not (
+            state["status"] == "running" and (state.get("result_ready") or state["operation"] == "stems")
+        ) and not (state["status"] == "queued" and state["operation"] == "stems"):
+            raise HTTPException(409, "Analysis is not ready")
+        return draft_preview(result_at(root), body, PROFILE["stem_model"])
+
     @app.put("/api/analyses/{analysis_id}/review")
     def review(analysis_id: UUID, body: ReviewPayload, request: Request):
         root, state, _ = read_case(request, analysis_id)
@@ -307,7 +316,9 @@ def create_app(cases=None, queue=None, authenticate_user=None, mode=None):
             raise HTTPException(
                 409, "This sample changed in another window. Reload it first."
             ) from None
-        return {"analysis": reviewed.model_dump(mode="json")}
+        from lastrada.reporting.document import document_text
+
+        return {"analysis": reviewed.model_dump(mode="json"), "document": document_text(reviewed)}
 
     @app.get("/api/analyses/{analysis_id}/comparison")
     def comparison(analysis_id: UUID, request: Request):
