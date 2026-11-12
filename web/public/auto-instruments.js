@@ -1,13 +1,4 @@
-const MAX_AUTOMATIC_PASSES = 6;
-
-let activeAnalysisId = "";
-let mockTransport = false;
 let scheduled = false;
-const automaticRuns = new Map();
-
-function setText(element, value) {
-  if (element && element.textContent !== value) element.textContent = value;
-}
 
 function normalize(value) {
   return String(value || "")
@@ -15,28 +6,8 @@ function normalize(value) {
     .trim();
 }
 
-function requestUrl(request) {
-  if (typeof request === "string") return request;
-  if (request instanceof URL) return request.href;
-  return request?.url || "";
-}
-
-function runState() {
-  const key = activeAnalysisId || "current-analysis";
-  if (!automaticRuns.has(key)) {
-    automaticRuns.set(key, { attempts: 0, signatures: new Set() });
-  }
-  return automaticRuns.get(key);
-}
-
-function controlsSignature(controls) {
-  const copy = controls.cloneNode(true);
-  copy
-    .querySelectorAll(
-      "button, .instrumentTable, .automaticInstrumentStatus, .spinner",
-    )
-    .forEach((element) => element.remove());
-  return `${activeAnalysisId || "current-analysis"}|${normalize(copy.textContent)}`;
+function setText(element, value) {
+  if (element && element.textContent !== value) element.textContent = value;
 }
 
 function statusLine(controls) {
@@ -57,32 +28,37 @@ function updateRelationshipCopy() {
     .querySelectorAll(".relationshipEvidenceCell small")
     .forEach((element) => {
       const text = normalize(element.textContent);
-      if (text === "Run the stem + DTW check above.") {
-        element.textContent = "Automatic Demucs + DTW evidence is pending.";
-      } else if (text === "Retry the stem + DTW check above.") {
+      if (
+        text === "Run the stem + DTW check above." ||
+        text === "Automatic Demucs + DTW evidence is pending."
+      ) {
         element.textContent =
-          "The automatic Demucs + DTW check could not finish.";
+          "No completed grouped representative comparison is stored for this relationship.";
+      } else if (
+        text === "Retry the stem + DTW check above." ||
+        text === "The automatic Demucs + DTW check could not finish."
+      ) {
+        element.textContent =
+          "The integrated grouped representative comparison could not finish.";
       }
     });
 }
 
 function updateTestingLimitCopy() {
   document.querySelectorAll("#view small").forEach((element) => {
+    const text = normalize(element.textContent);
     if (
-      normalize(element.textContent).includes(
-        "Up to 3 requests per person and 20 shared requests daily",
-      )
+      text.includes("Up to 3 requests per person and 20 shared requests daily") ||
+      text.includes("Demucs and stem-level DTW run automatically after")
     ) {
       element.textContent =
-        "Demucs and stem-level DTW run automatically after the timestamp analysis. Testing limits are 25 operations per person and 200 shared operations daily.";
+        "Sony, full-mix DTW, grouped Demucs and same-stem DTW run as one analysis before review. Testing limits are 25 operations per person and 200 shared operations daily.";
     }
   });
 }
 
-function enhanceAutomaticInstrumentFlow() {
+function enhanceIntegratedInstrumentFlow() {
   scheduled = false;
-  if (mockTransport && !window.__LASTRADA_FORCE_AUTO_INSTRUMENTS__) return;
-
   updateRelationshipCopy();
   updateTestingLimitCopy();
 
@@ -90,129 +66,79 @@ function enhanceAutomaticInstrumentFlow() {
   if (!controls) return;
 
   controls.classList.add("automaticInstrumentControls");
-  const heading = controls.querySelector("h2");
-  setText(heading, "Automatic instrument evidence");
-  const description = controls.querySelector("p.muted");
-  if (description) {
-    setText(description, "Instrument checks run automatically. Compare supporting alignments and estimated sounds at each timestamp below. Short clips use surrounding context; presence in both mixes does not establish sampling.");
-  }
+  controls.dataset.integratedStemPipeline = "true";
 
-  const status = statusLine(controls);
-  const action = controls.querySelector(
-    'button[data-action="stems"]:not([disabled])',
+  setText(controls.querySelector("h2"), "Automatic instrument evidence");
+  setText(
+    controls.querySelector("p.muted"),
+    "Grouped Demucs and same-stem DTW are completed during the main analysis. Compare the stored supporting alignments and estimated sounds below. Short clips may use surrounding context; presence in both mixes does not establish sampling.",
   );
 
   controls
-    .querySelectorAll('button[data-action="stems"], button:disabled')
+    .querySelectorAll('button[data-action="stems"]')
     .forEach((button) => {
       button.hidden = true;
+      button.disabled = true;
       button.setAttribute("aria-hidden", "true");
       button.tabIndex = -1;
     });
 
-  if (action) {
-    const label = normalize(action.textContent).toLowerCase();
-    const state = runState();
-    if (state.attempts >= MAX_AUTOMATIC_PASSES) {
-      setText(status,
-        "Automatic Demucs + DTW analysis reached its safe retry limit. Completed evidence is preserved.");
-      return;
-    }
-    setText(status, label.includes("continue")
-      ? "Automatic Demucs + DTW analysis is continuing with the remaining matched moments."
-      : label.includes("try")
-        ? "Automatic Demucs + DTW analysis is retrying after an incomplete pass."
-        : "Automatic Demucs + DTW analysis is starting.");
-
-    const signature = controlsSignature(controls);
-    if (!state.signatures.has(signature)) {
-      state.attempts += 1;
-      state.signatures.add(signature);
-      window.setTimeout(() => {
-        if (
-          action.isConnected &&
-          !(mockTransport && !window.__LASTRADA_FORCE_AUTO_INSTRUMENTS__)
-        ) {
-          action.click();
-        }
-      }, 0);
-    }
-    return;
-  }
-
+  const status = statusLine(controls);
   const text = normalize(controls.textContent).toLowerCase();
+  const hasPendingAction = Boolean(
+    controls.querySelector('button[data-action="stems"]'),
+  );
+
   if (controls.querySelector(".spinner") || text.includes("in progress")) {
-    setText(status,
-      "Automatic Demucs + DTW analysis is running. Results will appear in the relationship table.");
+    setText(
+      status,
+      "A legacy instrument job is still running. New analyses finish grouped Demucs and same-stem DTW before this page opens.",
+    );
   } else if (
     text.includes("could not finish") ||
     text.includes("check failed") ||
     text.includes("model unavailable")
   ) {
-    setText(status,
-      "Automatic Demucs + DTW analysis could not finish. The Sony and timing analysis is still preserved.");
+    setText(
+      status,
+      "Some grouped representative comparisons could not finish. Timestamp evidence is preserved, and no post-page retry will start.",
+    );
   } else if (
     text.includes("no paired region with original timestamps") ||
     text.includes("instrument check unavailable")
   ) {
-    setText(status,
-      "Original-track timestamps are needed for automatic instrument checks.");
-  } else if (
-    text.includes("completed results are reused") ||
-    /\d+ of \d+ moments compared/.test(text)
-  ) {
-    setText(status,
-      "Automatic Demucs + DTW analysis is complete. Review the evidence in the relationship table.");
+    setText(
+      status,
+      "Original-track timestamps were unavailable for grouped instrument evidence.",
+    );
+  } else if (hasPendingAction || text.includes("not checked yet")) {
+    setText(
+      status,
+      "This saved analysis does not contain completed integrated stem evidence. Start a new sample to run grouped Demucs and same-stem DTW before review.",
+    );
   } else {
-    setText(status,
-      "Automatic Demucs + DTW analysis will begin when paired timestamps are ready.");
+    setText(
+      status,
+      "Grouped Demucs and same-stem DTW completed during the main analysis. Review the evidence in the relationship table.",
+    );
   }
 }
 
-function scheduleAutomaticInstrumentFlow() {
+function scheduleIntegratedInstrumentFlow() {
   if (scheduled || typeof window === "undefined") return;
   scheduled = true;
-  window.requestAnimationFrame(enhanceAutomaticInstrumentFlow);
+  window.requestAnimationFrame(enhanceIntegratedInstrumentFlow);
 }
 
 if (typeof window !== "undefined" && typeof document !== "undefined") {
-  const nativeFetch = window.fetch.bind(window);
-  window.fetch = async (...arguments_) => {
-    const response = await nativeFetch(...arguments_);
-    try {
-      const url = new URL(requestUrl(arguments_[0]), window.location.href);
-      if (url.hostname.endsWith(".lastrada.test")) mockTransport = true;
-
-      const match = url.pathname.match(/\/api\/analyses\/([^/]+)/);
-      if (match) activeAnalysisId = match[1];
-
-      if (
-        response.ok &&
-        url.pathname === "/api/analyses" &&
-        String(arguments_[1]?.method || "GET").toUpperCase() === "POST"
-      ) {
-        response
-          .clone()
-          .json()
-          .then((payload) => {
-            if (payload?.id) activeAnalysisId = String(payload.id);
-            scheduleAutomaticInstrumentFlow();
-          })
-          .catch(() => {});
-      }
-    } catch {}
-    scheduleAutomaticInstrumentFlow();
-    return response;
-  };
-
   const view = document.querySelector("#view");
   if (view) {
-    new MutationObserver(scheduleAutomaticInstrumentFlow).observe(view, {
+    new MutationObserver(scheduleIntegratedInstrumentFlow).observe(view, {
       childList: true,
       subtree: true,
       characterData: true,
     });
   }
-  window.addEventListener("load", scheduleAutomaticInstrumentFlow);
-  scheduleAutomaticInstrumentFlow();
+  window.addEventListener("load", scheduleIntegratedInstrumentFlow);
+  scheduleIntegratedInstrumentFlow();
 }
