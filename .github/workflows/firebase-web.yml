@@ -29,6 +29,7 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 jobs:
   web:
@@ -64,16 +65,38 @@ jobs:
     needs: web
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    env:
+      PROJECT_ID: lastrada-64bab
+      REGION: us-central1
+      GHCR_IMAGE: ghcr.io/tankr98/lastrada
+      SITE_URL: https://lastrada-alt.web.app
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+
+      - name: Build and publish the validated application image
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          IMAGE="${GHCR_IMAGE}:${GITHUB_SHA}"
+          echo "LASTRADA_IMAGE=${IMAGE}" >> "${GITHUB_ENV}"
+          printf '%s' "${GHCR_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          DOCKER_BUILDKIT=1 docker build \
+            --file deploy/Dockerfile \
+            --label org.opencontainers.image.source=https://github.com/tankr98/Lastrada \
+            --label org.opencontainers.image.revision="${GITHUB_SHA}" \
+            --tag "${IMAGE}" \
+            .
+          docker push "${IMAGE}"
+          docker logout ghcr.io
+          docker manifest inspect "${IMAGE}" >/dev/null
+
       - name: Use the existing deployment credential
         env:
           FIREBASE_SA: >-
@@ -91,16 +114,108 @@ jobs:
           umask 077
           printf '%s' "${FIREBASE_SA}" > "${RUNNER_TEMP}/firebase-stack-account.json"
           echo "GOOGLE_APPLICATION_CREDENTIALS=${RUNNER_TEMP}/firebase-stack-account.json" >> "${GITHUB_ENV}"
+
       - uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: lastrada-64bab
+
       - name: Authenticate the existing deployment account
         run: >-
           gcloud auth activate-service-account
           --key-file="${GOOGLE_APPLICATION_CREDENTIALS}"
-          --project=lastrada-64bab
-      - name: Redeploy the validated backend without changing the frontend flow
-        run: python deploy/redeploy.py --mode apply --sha "${GITHUB_SHA}"
+          --project="${PROJECT_ID}"
+
+      - name: Deploy the worker and API
+        run: |
+          set -euo pipefail
+          for SERVICE in lastrada-worker lastrada-api; do
+            gcloud run services update "${SERVICE}" \
+              --project "${PROJECT_ID}" \
+              --region "${REGION}" \
+              --image "${LASTRADA_IMAGE}" \
+              --update-env-vars="LASTRADA_BUILD_SHA=${GITHUB_SHA},LASTRADA_BUILD_BRANCH=local/stem-fast" \
+              --quiet
+            gcloud run services update-traffic "${SERVICE}" \
+              --project "${PROJECT_ID}" \
+              --region "${REGION}" \
+              --to-latest \
+              --quiet
+          done
+
+      - name: Keep the current frontend flow and publish matching assets
+        run: |
+          set -euo pipefail
+          API_URL="$(gcloud run services describe lastrada-api \
+            --project "${PROJECT_ID}" \
+            --region "${REGION}" \
+            --format='value(status.url)')"
+          curl --fail --silent --show-error --retry 5 \
+            "${SITE_URL}/config.json" \
+            --output /tmp/live-config.json
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          config = json.loads(Path('/tmp/live-config.json').read_text())
+          config['apiBase'] = os.environ['API_URL']
+          config['build'] = {
+              'branch': 'local/stem-fast',
+              'commit': os.environ['GITHUB_SHA'],
+              'profile': 'stem-fast',
+              'dirty': False,
+          }
+          Path('web/public/config.json').write_text(json.dumps(config, indent=2) + '\n')
+          PY
+          npx --yes firebase-tools@15.4.0 deploy \
+            --only hosting \
+            --project "${PROJECT_ID}" \
+            --config firebase.json \
+            --non-interactive
+        env:
+          API_URL: ${{ env.API_URL }}
+
+      - name: Verify the deployed application and release order
+        run: |
+          set -euo pipefail
+          API_URL="$(gcloud run services describe lastrada-api \
+            --project "${PROJECT_ID}" \
+            --region "${REGION}" \
+            --format='value(status.url)')"
+          curl --fail --silent --show-error --retry 12 --retry-delay 5 \
+            "${API_URL}/health" \
+            --output /tmp/health.json
+          curl --fail --silent --show-error --retry 12 --retry-delay 5 \
+            "${SITE_URL}/config.json?release=${GITHUB_SHA}" \
+            --output /tmp/config.json
+          curl --fail --silent --show-error --retry 12 --retry-delay 5 \
+            "${SITE_URL}/auto-instruments.js?release=${GITHUB_SHA}" \
+            --output /tmp/auto-instruments.js
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          health = json.loads(Path('/tmp/health.json').read_text())
+          expected = {
+              'status': 'ok',
+              'branch': 'local/stem-fast',
+              'commit': os.environ['GITHUB_SHA'],
+              'profile': 'stem-fast',
+          }
+          if any(health.get(key) != value for key, value in expected.items()):
+              raise SystemExit(f'Unexpected health response: {health!r}')
+          config = json.loads(Path('/tmp/config.json').read_text())
+          if config.get('build', {}).get('commit') != os.environ['GITHUB_SHA']:
+              raise SystemExit(f'Hosting build metadata is stale: {config!r}')
+          script = Path('/tmp/auto-instruments.js').read_text()
+          if '.click()' in script:
+              raise SystemExit('The deployed review page can still launch a post-load stem job')
+          if 'completed during the main analysis' not in script:
+              raise SystemExit('The deployed integrated stem status copy is missing')
+          PY
+          cmp web/public/auto-instruments.js /tmp/auto-instruments.js
+
       - name: Remove temporary credentials
         if: always()
         run: rm -f "${RUNNER_TEMP}/firebase-stack-account.json"
