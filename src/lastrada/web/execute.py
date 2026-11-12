@@ -52,6 +52,8 @@ def execute(owner, analysis_id, operation, task_id):
     from lastrada.schemas.models import Intake, Work, Analysis
     from lastrada.reporting.comparison import spectral_view, comparison_figure
     from lastrada.recognition.sampleid_adapter import SampleIDAdapter
+    from lastrada.separation.grouped_occurrences import run_grouped_instruments
+    from lastrada.separation.occurrences import instrument_progress
 
     repo = Cases()
     root = prefix(owner, analysis_id)
@@ -70,21 +72,21 @@ def execute(owner, analysis_id, operation, task_id):
         new = decode(paths["new"].read_bytes())
         settings = analysis_settings()
 
+        def save_instruments(partial):
+            """Persist progress without releasing a partial result to the frontend."""
+
+            partial.methods["web_profile"] = PROFILE["name"]
+            repo.write(root + "/result.json", partial.model_dump(mode="json"))
+            current, revision = repo.read(root + "/case.json")
+            if current.get("task_id") == task_id:
+                current["instrument_progress"] = instrument_progress(partial)
+                repo.write(root + "/case.json", current, revision)
+
         if operation == "stems":
+            # Compatibility path for analyses created before the integrated
+            # pipeline. New analyses already contain grouped stem evidence.
             data, _ = repo.read(root + "/result.json")
             result = Analysis.model_validate(data)
-            from lastrada.separation.grouped_occurrences import (
-                run_grouped_instruments,
-            )
-            from lastrada.separation.occurrences import instrument_progress
-
-            def save_instruments(partial):
-                repo.write(root + "/result.json", partial.model_dump(mode="json"))
-                current, revision = repo.read(root + "/case.json")
-                if current.get("task_id") == task_id:
-                    current["instrument_progress"] = instrument_progress(partial)
-                    repo.write(root + "/case.json", current, revision)
-
             result = run_grouped_instruments(
                 result,
                 original,
@@ -128,23 +130,9 @@ def execute(owner, analysis_id, operation, task_id):
                     "fallback estimates. Original-track positions may be unknown."
                 )
 
-            def publish_ready(partial):
-                current, revision = repo.read(root + "/case.json")
-                if current.get("task_id") != task_id:
-                    return
-                partial.methods["web_profile"] = PROFILE["name"]
-                repo.write(root + "/result.json", partial.model_dump(mode="json"))
-                current.update(
-                    result_ready=True,
-                    result_version=current.get("result_version", 0) + 1,
-                )
-                current.setdefault("first_result_at", time.time())
-                repo.write(root + "/case.json", current, revision)
-
-            # Keep the deployed frontend flow, but make candidate recognition
-            # Sony/full-mix-DTW only. Demucs no longer changes or gates the initial
-            # timestamp candidates; the existing instrument action invokes the
-            # grouped representative backend above.
+            # Sony and full-mix DTW establish candidate timestamps first. The
+            # grouped Demucs stage below validates representative occurrences
+            # without changing the Sony candidate-generation behavior.
             main_settings = settings.model_copy(
                 update={
                     "stem_enabled": False,
@@ -157,16 +145,16 @@ def execute(owner, analysis_id, operation, task_id):
                 new,
                 adapter=adapter,
                 settings=main_settings,
-                on_result=publish_ready,
             )
             adapter = None
             result.methods["web_profile"] = PROFILE["name"]
             result.methods["stem_strategy"] = (
-                "deferred_grouped_representatives_same_stem"
+                "integrated_grouped_representatives_same_stem"
             )
             if warning:
                 result.warnings.append(warning)
                 result.methods["sampleid"] = matcher_failure
+
             comparison = comparison_figure(
                 spectral_view(original),
                 spectral_view(new),
@@ -178,11 +166,46 @@ def execute(owner, analysis_id, operation, task_id):
                 json.loads(comparison.to_json()),
             )
 
+            # Complete grouped Demucs and same-stem DTW before releasing the
+            # timestamp review or Nature of Use draft. Progress may be persisted,
+            # but result_ready is not set while this work is running.
+            if settings.stem_group_enabled:
+                try:
+                    result = run_grouped_instruments(
+                        result,
+                        original,
+                        new,
+                        settings,
+                        on_progress=save_instruments,
+                        budget_seconds=1200,
+                        max_new_checks=100,
+                    )
+                except (OSError, RuntimeError, ValueError) as error:
+                    result.methods["instruments"] = (
+                        "unavailable: integrated grouped stem analysis failed "
+                        f"({type(error).__name__}: {error})"
+                    )
+                    result.warnings.append(
+                        "Grouped Demucs and same-stem DTW could not finish. "
+                        "Sony and full-mix timing evidence is preserved."
+                    )
+            else:
+                result.methods["instruments"] = (
+                    "not_run: grouped stem analysis disabled"
+                )
+
         repo.write(root + "/result.json", result.model_dump(mode="json"))
 
     state, generation = repo.read(root + "/case.json")
     if state.get("task_id") == task_id:
-        state.update(status="completed", completed=time.time(), error=None)
+        state.update(
+            status="completed",
+            completed=time.time(),
+            error=None,
+            result_ready=True,
+            result_version=state.get("result_version", 0) + 1,
+            instrument_progress=instrument_progress(result),
+        )
         repo.write(root + "/case.json", state, generation)
 
 
