@@ -53,7 +53,10 @@ def execute(owner, analysis_id, operation, task_id):
     from lastrada.reporting.comparison import spectral_view, comparison_figure
     from lastrada.recognition.sampleid_adapter import SampleIDAdapter
     from lastrada.separation.grouped_occurrences import run_grouped_instruments
-    from lastrada.separation.occurrences import instrument_progress
+    from lastrada.separation.occurrences import (
+        instrument_progress,
+        run_occurrence_instruments,
+    )
 
     repo = Cases()
     root = prefix(owner, analysis_id)
@@ -84,17 +87,16 @@ def execute(owner, analysis_id, operation, task_id):
 
         if operation == "stems":
             # Compatibility path for analyses created before the integrated
-            # pipeline. New analyses already contain grouped stem evidence.
+            # pipeline. New analyses already contain grouped stem evidence and
+            # never launch this endpoint after the review page loads.
             data, _ = repo.read(root + "/result.json")
             result = Analysis.model_validate(data)
-            result = run_grouped_instruments(
+            result = run_occurrence_instruments(
                 result,
                 original,
                 new,
                 settings,
                 on_progress=save_instruments,
-                budget_seconds=1200,
-                max_new_checks=100,
             )
         else:
             credits = state["credits"]
