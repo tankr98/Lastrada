@@ -7,8 +7,8 @@ drums, or another instrument.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict, dataclass
 
 from lastrada.alignment.dtw import refine_candidate_dtw_details
 from lastrada.schemas.models import Interval
@@ -56,7 +56,8 @@ class StemComparisonResult:
         # baseline. The complete table still shows every ordered pair.
         for item in self.evidence:
             if item.accepted and (
-                item.source_stem != "full_mix" or item.derivative_stem != "full_mix"
+                item.source_stem != "full_mix"
+                or item.derivative_stem != "full_mix"
             ):
                 return item
         for item in self.evidence:
@@ -70,8 +71,10 @@ def candidate_stem_pairs(
     derivative_stems,
     *,
     include_cross_other: bool = True,
+    include_full_mix: bool = True,
 ):
     """Return conservative stem pairs, avoiding an all-by-all explosion."""
+
     source = set(source_stems)
     derivative = set(derivative_stems)
     ordered = []
@@ -86,6 +89,8 @@ def candidate_stem_pairs(
         "other",
     ]
     for stem in preferred_order:
+        if stem == "full_mix" and not include_full_mix:
+            continue
         if stem in source and stem in derivative:
             ordered.append((stem, stem))
 
@@ -105,16 +110,21 @@ def candidate_stem_pairs(
 
 def bounded_stem_probe(interval, maximum=8.0):
     """Take a centered paired fraction; never expand or re-label the match."""
+
     if interval.original_start is None or interval.original_end is None:
         raise ValueError("Stem comparison requires source timestamps")
     if not 0 < maximum <= 8:
         raise ValueError("Stem probes must be at most eight seconds")
-    widths = [interval.new_end - interval.new_start, interval.original_end - interval.original_start]
+    widths = [
+        interval.new_end - interval.new_start,
+        interval.original_end - interval.original_start,
+    ]
     fraction = min(1.0, maximum / max(widths))
     values = interval.model_dump()
     values.update(end_review=None, ending_review_context=None)
-    for prefix, width in zip(("new", "original"), widths):
-        start, end = getattr(interval, prefix + "_start"), getattr(interval, prefix + "_end")
+    for prefix, width in zip(("new", "original"), widths, strict=True):
+        start = getattr(interval, prefix + "_start")
+        end = getattr(interval, prefix + "_end")
         left = start + (width - width * fraction) / 2
         values[prefix + "_start"] = left
         values[prefix + "_end"] = end if fraction == 1 else left + width * fraction
@@ -141,27 +151,55 @@ def compare_candidate_stems(
     maximum_duration_ratio: float = 1.5,
     minimum_duration: float = 0.5,
     include_cross_other: bool = True,
+    include_full_mix: bool = True,
     parallel_separation: bool = False,
+    parallel_dtw: bool = False,
+    dtw_workers: int = 2,
 ) -> StemComparisonResult:
     """Compare bounded paired crops; return their exact scope with the evidence."""
+
     if interval.original_start is None or interval.original_end is None:
         raise ValueError("Stem comparison requires source timestamps")
     candidate = interval
     interval = bounded_stem_probe(candidate)
 
     def separate(audio, start, end):
-        return separator.separate_region(audio, start, end, padding_seconds=separation_padding)
+        return separator.separate_region(
+            audio,
+            start,
+            end,
+            padding_seconds=separation_padding,
+        )
 
     if parallel_separation:
-        # Only the bounded per-occurrence path opts in. Main analysis may still
-        # retain Sony in memory and uses sequential separation.
+        # The legacy per-occurrence path can separate both sides concurrently.
+        # The grouped path instead parallelizes groups, avoiding nested model
+        # fan-out and excessive memory use.
         with ThreadPoolExecutor(max_workers=2) as pool:
-            source = pool.submit(separate, original, interval.original_start, interval.original_end)
-            derivative = pool.submit(separate, new, interval.new_start, interval.new_end)
+            source = pool.submit(
+                separate,
+                original,
+                interval.original_start,
+                interval.original_end,
+            )
+            derivative = pool.submit(
+                separate,
+                new,
+                interval.new_start,
+                interval.new_end,
+            )
             source_region, derivative_region = source.result(), derivative.result()
     else:
-        source_region = separate(original, interval.original_start, interval.original_end)
-        derivative_region = separate(new, interval.new_start, interval.new_end)
+        source_region = separate(
+            original,
+            interval.original_start,
+            interval.original_end,
+        )
+        derivative_region = separate(
+            new,
+            interval.new_start,
+            interval.new_end,
+        )
 
     local_interval = Interval(
         new_start=derivative_region.candidate_start_local,
@@ -172,15 +210,15 @@ def compare_candidate_stems(
         status="candidate",
         similarity=interval.similarity,
     )
-
-    evidence = []
     pairs = candidate_stem_pairs(
         source_region.stems,
         derivative_region.stems,
         include_cross_other=include_cross_other,
+        include_full_mix=include_full_mix,
     )
 
-    for source_stem, derivative_stem in pairs:
+    def compare_pair(pair):
+        source_stem, derivative_stem = pair
         detail = refine_candidate_dtw_details(
             source_region.stems[source_stem],
             derivative_region.stems[derivative_stem],
@@ -195,28 +233,31 @@ def compare_candidate_stems(
         local_refined = detail.interval
         refined_start = derivative_region.offset_seconds + local_refined.new_start
         refined_end = derivative_region.offset_seconds + local_refined.new_end
-        refined_duration = refined_end - refined_start
-
-        evidence.append(
-            StemPairEvidence(
-                source_stem=source_stem,
-                derivative_stem=derivative_stem,
-                accepted=detail.accepted,
-                reason=detail.reason,
-                mean_dtw_cost=detail.mean_cost,
-                pitch_shift_semitones=detail.pitch_shift_semitones,
-                duration_ratio=detail.duration_ratio,
-                source_start=interval.original_start,
-                source_end=interval.original_end,
-                sony_new_start=interval.new_start,
-                sony_new_end=interval.new_end,
-                refined_new_start=float(refined_start),
-                refined_new_end=float(refined_end),
-                refined_duration=float(refined_duration),
-                same_label=source_stem == derivative_stem,
-                sony_similarity=interval.similarity,
-            )
+        return StemPairEvidence(
+            source_stem=source_stem,
+            derivative_stem=derivative_stem,
+            accepted=detail.accepted,
+            reason=detail.reason,
+            mean_dtw_cost=detail.mean_cost,
+            pitch_shift_semitones=detail.pitch_shift_semitones,
+            duration_ratio=detail.duration_ratio,
+            source_start=interval.original_start,
+            source_end=interval.original_end,
+            sony_new_start=interval.new_start,
+            sony_new_end=interval.new_end,
+            refined_new_start=float(refined_start),
+            refined_new_end=float(refined_end),
+            refined_duration=float(refined_end - refined_start),
+            same_label=source_stem == derivative_stem,
+            sony_similarity=interval.similarity,
         )
+
+    if parallel_dtw and len(pairs) > 1:
+        worker_count = max(1, min(int(dtw_workers), len(pairs)))
+        with ThreadPoolExecutor(max_workers=worker_count) as pool:
+            evidence = list(pool.map(compare_pair, pairs))
+    else:
+        evidence = [compare_pair(pair) for pair in pairs]
 
     # Accepted results first; among those, same-label evidence and lower DTW cost
     # rank higher. This is only an ordering rule, not a confidence calculation.
@@ -230,6 +271,9 @@ def compare_candidate_stems(
         )
     )
     return StemComparisonResult(
-        source_region, derivative_region, evidence,
-        probe=interval, partial=probe_is_partial(interval, candidate),
+        source_region,
+        derivative_region,
+        evidence,
+        probe=interval,
+        partial=probe_is_partial(interval, candidate),
     )

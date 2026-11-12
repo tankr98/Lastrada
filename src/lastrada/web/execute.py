@@ -12,7 +12,9 @@ import time
 def checkpoint():
     import requests
 
-    destination = Path(os.getenv("LASTRADA_MODEL_PATH", "/tmp/lastrada/sampleid-best.ckpt"))
+    destination = Path(
+        os.getenv("LASTRADA_MODEL_PATH", "/tmp/lastrada/sampleid-best.ckpt")
+    )
     expected = os.getenv(
         "LASTRADA_SAMPLEID_SHA256",
         "a6026b65b6516569aa7a6c7f967e2ebe31dcb123af53560b122d87d72ddf4693",
@@ -58,20 +60,23 @@ def execute(owner, analysis_id, operation, task_id):
         return
     state.update(status="running", started=time.time())
     repo.write(root + "/case.json", state, generation)
+
     with tempfile.TemporaryDirectory() as folder:
         paths = {}
         for role in ("original", "new"):
             paths[role] = Path(folder) / role
             repo.download(root + f"/{role}", paths[role])
-        original, new = decode(paths["original"].read_bytes()), decode(paths["new"].read_bytes())
+        original = decode(paths["original"].read_bytes())
+        new = decode(paths["new"].read_bytes())
         settings = analysis_settings()
+
         if operation == "stems":
             data, _ = repo.read(root + "/result.json")
             result = Analysis.model_validate(data)
-            from lastrada.separation.occurrences import (
-                run_occurrence_instruments,
-                instrument_progress,
+            from lastrada.separation.grouped_occurrences import (
+                run_grouped_instruments,
             )
+            from lastrada.separation.occurrences import instrument_progress
 
             def save_instruments(partial):
                 repo.write(root + "/result.json", partial.model_dump(mode="json"))
@@ -80,8 +85,14 @@ def execute(owner, analysis_id, operation, task_id):
                     current["instrument_progress"] = instrument_progress(partial)
                     repo.write(root + "/case.json", current, revision)
 
-            result = run_occurrence_instruments(
-                result, original, new, settings, on_progress=save_instruments
+            result = run_grouped_instruments(
+                result,
+                original,
+                new,
+                settings,
+                on_progress=save_instruments,
+                budget_seconds=1200,
+                max_new_checks=100,
             )
         else:
             credits = state["credits"]
@@ -103,12 +114,19 @@ def execute(owner, analysis_id, operation, task_id):
             try:
                 adapter = SampleIDAdapter(
                     checkpoint(),
-                    os.getenv("LASTRADA_CACHE_DIR", "/tmp/lastrada/cache") + "/sampleid",
+                    os.getenv("LASTRADA_CACHE_DIR", "/tmp/lastrada/cache")
+                    + "/sampleid",
                     batch_size=2,
                 )
             except Exception as error:
-                matcher_failure = f"unavailable: matcher preparation failed ({type(error).__name__})"
-                warning = "Sony matching is unavailable; displayed times are PF-NMF fallback estimates. Original-track positions may be unknown."
+                matcher_failure = (
+                    "unavailable: matcher preparation failed "
+                    f"({type(error).__name__})"
+                )
+                warning = (
+                    "Sony matching is unavailable; displayed times are PF-NMF "
+                    "fallback estimates. Original-track positions may be unknown."
+                )
 
             def publish_ready(partial):
                 current, revision = repo.read(root + "/case.json")
@@ -116,14 +134,36 @@ def execute(owner, analysis_id, operation, task_id):
                     return
                 partial.methods["web_profile"] = PROFILE["name"]
                 repo.write(root + "/result.json", partial.model_dump(mode="json"))
-                current.update(result_ready=True, result_version=current.get("result_version", 0) + 1)
+                current.update(
+                    result_ready=True,
+                    result_version=current.get("result_version", 0) + 1,
+                )
                 current.setdefault("first_result_at", time.time())
                 repo.write(root + "/case.json", current, revision)
 
-            result = analyze_pair(intake, original, new, adapter=adapter, settings=settings,
-                                  on_result=publish_ready)
+            # Keep the deployed frontend flow, but make candidate recognition
+            # Sony/full-mix-DTW only. Demucs no longer changes or gates the initial
+            # timestamp candidates; the existing instrument action invokes the
+            # grouped representative backend above.
+            main_settings = settings.model_copy(
+                update={
+                    "stem_enabled": False,
+                    "stem_include_cross_other": False,
+                }
+            )
+            result = analyze_pair(
+                intake,
+                original,
+                new,
+                adapter=adapter,
+                settings=main_settings,
+                on_result=publish_ready,
+            )
             adapter = None
             result.methods["web_profile"] = PROFILE["name"]
+            result.methods["stem_strategy"] = (
+                "deferred_grouped_representatives_same_stem"
+            )
             if warning:
                 result.warnings.append(warning)
                 result.methods["sampleid"] = matcher_failure
@@ -133,8 +173,13 @@ def execute(owner, analysis_id, operation, task_id):
                 result.master.locate.sample_occurrences
                 or result.master.locate.measurement_intervals,
             )
-            repo.write(root + "/comparison.json", json.loads(comparison.to_json()))
+            repo.write(
+                root + "/comparison.json",
+                json.loads(comparison.to_json()),
+            )
+
         repo.write(root + "/result.json", result.model_dump(mode="json"))
+
     state, generation = repo.read(root + "/case.json")
     if state.get("task_id") == task_id:
         state.update(status="completed", completed=time.time(), error=None)

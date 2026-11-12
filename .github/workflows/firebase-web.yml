@@ -1,23 +1,106 @@
 name: Firebase web validation
 on:
   push:
-    paths: ['run-local.py', 'Start-Lastrada.cmd', 'Start-Lastrada.command', 'web/**', 'configs/**', 'deploy/**', 'src/lastrada/**', 'tests/**', 'pyproject.toml', 'firebase.json', '.github/workflows/firebase-web.yml']
+    paths:
+      - run-local.py
+      - Start-Lastrada.cmd
+      - Start-Lastrada.command
+      - web/**
+      - configs/**
+      - deploy/**
+      - src/lastrada/**
+      - tests/**
+      - pyproject.toml
+      - firebase.json
+      - .github/workflows/firebase-web.yml
   pull_request:
-    paths: ['run-local.py', 'Start-Lastrada.cmd', 'Start-Lastrada.command', 'web/**', 'configs/**', 'deploy/**', 'src/lastrada/**', 'tests/**', 'pyproject.toml', 'firebase.json', '.github/workflows/firebase-web.yml']
+    paths:
+      - run-local.py
+      - Start-Lastrada.cmd
+      - Start-Lastrada.command
+      - web/**
+      - configs/**
+      - deploy/**
+      - src/lastrada/**
+      - tests/**
+      - pyproject.toml
+      - firebase.json
+      - .github/workflows/firebase-web.yml
+
+permissions:
+  contents: read
+
 jobs:
   web:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: {python-version: '3.12'}
+        with:
+          python-version: '3.12'
       - uses: actions/setup-node@v4
-        with: {node-version: '22'}
-      - run: python -m pip install -r requirements.lock -r deploy/requirements-api.txt && python -m pip install --no-deps -e .
+        with:
+          node-version: '22'
+      - run: >-
+          python -m pip install -r requirements.lock
+          -r deploy/requirements-api.txt
+          && python -m pip install --no-deps -e .
       - run: ruff check . && pytest -q
-      - run: python -m py_compile run-local.py && python run-local.py --help && bash -n Start-Lastrada.command
+      - run: >-
+          python -m py_compile run-local.py
+          && python run-local.py --help
+          && bash -n Start-Lastrada.command
       - run: node --check web/public/app.js
-      - run: npm ci --prefix web && cd web && npx playwright install --with-deps chromium
+      - run: >-
+          npm ci --prefix web
+          && cd web
+          && npx playwright install --with-deps chromium
       - run: npm test --prefix web
       - run: npm run test:instruments --prefix web
       - run: python deploy/bootstrap.py
+
+  deploy-backend:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/local/stem-fast'
+    needs: web
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Use the existing deployment credential
+        env:
+          FIREBASE_SA: >-
+            ${{ secrets.FIREBASE_SERVICE_ACCOUNT_LASTRADA_64BAB
+            || secrets.FIREBASE_SERVICE_ACCOUNT
+            || secrets.GCP_SA_KEY
+            || secrets.GOOGLE_CREDENTIALS
+            || secrets.GCP_CREDENTIALS }}
+        run: |
+          set -euo pipefail
+          if [ -z "${FIREBASE_SA}" ]; then
+            echo 'No existing service-account deployment credential is available.' >&2
+            exit 1
+          fi
+          umask 077
+          printf '%s' "${FIREBASE_SA}" > "${RUNNER_TEMP}/firebase-stack-account.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=${RUNNER_TEMP}/firebase-stack-account.json" >> "${GITHUB_ENV}"
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: lastrada-64bab
+      - name: Authenticate the existing deployment account
+        run: >-
+          gcloud auth activate-service-account
+          --key-file="${GOOGLE_APPLICATION_CREDENTIALS}"
+          --project=lastrada-64bab
+      - name: Redeploy the validated backend without changing the frontend flow
+        run: python deploy/redeploy.py --mode apply --sha "${GITHUB_SHA}"
+      - name: Remove temporary credentials
+        if: always()
+        run: rm -f "${RUNNER_TEMP}/firebase-stack-account.json"

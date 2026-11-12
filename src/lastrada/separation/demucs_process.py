@@ -68,9 +68,11 @@ class DemucsProcess:
 
 
 class DemucsProcessPool:
+    """Small process pool with one cached Demucs model per worker."""
+
     def __init__(self, workers=1):
-        if workers not in (1, 2):
-            raise ValueError("Only one or two bounded Demucs processes are supported")
+        if not 1 <= workers <= 8:
+            raise ValueError("Demucs process workers must be between one and eight")
         self.workers = [DemucsProcess() for _ in range(workers)]
         self.idle = Queue()
         for worker in self.workers:

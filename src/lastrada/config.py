@@ -33,8 +33,9 @@ class Settings(StrictModel):
     dtw_max_duration_ratio: float = Field(default=2.0, ge=1.0, le=10.0)
     dtw_minimum_duration_seconds: float = Field(default=0.5, gt=0, le=10.0)
 
-    # Opt-in candidate validation. Main UI uses one bounded probe after analysis;
-    # explicit laboratory configurations may still request more candidates.
+    # Optional candidate validation. The deployed Firebase profile defers this
+    # stage until the existing instrument-check action, then uses grouped
+    # representatives rather than checking every timestamp row.
     stem_enabled: bool = False
     stem_reuse_model: bool = False
     stem_model_name: Literal["htdemucs_6s", "htdemucs"] = "htdemucs"
@@ -44,6 +45,15 @@ class Settings(StrictModel):
     stem_include_cross_other: bool = False
     stem_probe_seconds: float = Field(default=8.0, ge=1.0, le=12.0)
     stem_timeout_seconds: int = Field(default=180, ge=30, le=600)
+
+    # Grouped backend settings. These do not alter the frontend data contract:
+    # group verdicts are propagated to the existing timestamp rows.
+    stem_group_enabled: bool = False
+    stem_group_workers: int = Field(default=3, ge=1, le=8)
+    stem_group_max_representatives: int = Field(default=3, ge=1, le=5)
+    stem_group_positive_confirmations: int = Field(default=2, ge=1, le=5)
+    stem_group_negative_confirmations: int = Field(default=3, ge=1, le=5)
+    stem_dtw_workers: int = Field(default=2, ge=1, le=8)
 
 
 def _optional_bool(name: str) -> bool | None:
@@ -61,13 +71,16 @@ def _optional_bool(name: str) -> bool | None:
 def _environment_overrides() -> dict:
     overrides = {}
 
-    enabled = _optional_bool("LASTRADA_STEM_ENABLED")
-    if enabled is not None:
-        overrides["stem_enabled"] = enabled
-
-    cross_other = _optional_bool("LASTRADA_STEM_CROSS_OTHER")
-    if cross_other is not None:
-        overrides["stem_include_cross_other"] = cross_other
+    boolean_fields = {
+        "LASTRADA_STEM_ENABLED": "stem_enabled",
+        "LASTRADA_STEM_REUSE_MODEL": "stem_reuse_model",
+        "LASTRADA_STEM_CROSS_OTHER": "stem_include_cross_other",
+        "LASTRADA_STEM_GROUP_ENABLED": "stem_group_enabled",
+    }
+    for environment_name, field_name in boolean_fields.items():
+        value = _optional_bool(environment_name)
+        if value is not None:
+            overrides[field_name] = value
 
     text_fields = {
         "LASTRADA_STEM_MODEL": "stem_model_name",
@@ -84,6 +97,20 @@ def _environment_overrides() -> dict:
             "stem_separation_padding_seconds",
             float,
         ),
+        "LASTRADA_STEM_GROUP_WORKERS": ("stem_group_workers", int),
+        "LASTRADA_STEM_GROUP_REPRESENTATIVES": (
+            "stem_group_max_representatives",
+            int,
+        ),
+        "LASTRADA_STEM_GROUP_POSITIVES": (
+            "stem_group_positive_confirmations",
+            int,
+        ),
+        "LASTRADA_STEM_GROUP_NEGATIVES": (
+            "stem_group_negative_confirmations",
+            int,
+        ),
+        "LASTRADA_STEM_DTW_WORKERS": ("stem_dtw_workers", int),
     }
     for environment_name, (field_name, converter) in numeric_fields.items():
         value = os.getenv(environment_name)
