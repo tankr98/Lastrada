@@ -73,9 +73,10 @@ def grouped_settings(**updates):
     return Settings(**values)
 
 
-def test_deployed_profile_keeps_frontend_but_enables_grouped_backend():
+def test_deployed_profile_integrates_grouped_backend_before_result_release():
     settings = analysis_settings()
     source = (ROOT / "src/lastrada/web/execute.py").read_text()
+    browser = (ROOT / "web/public/auto-instruments.js").read_text()
 
     assert settings.stem_group_enabled
     assert settings.stem_group_workers == 3
@@ -84,7 +85,19 @@ def test_deployed_profile_keeps_frontend_but_enables_grouped_backend():
     assert settings.stem_group_negative_confirmations == 3
     assert "main_settings = settings.model_copy" in source
     assert '"stem_enabled": False' in source
-    assert "run_grouped_instruments" in source
+
+    sony = source.index("result = analyze_pair")
+    grouped = source.index("result = run_grouped_instruments", sony)
+    completed = source.index('status="completed"', grouped)
+    released = source.index("result_ready=True", completed)
+    assert sony < grouped < completed < released
+    assert "def publish_ready" not in source
+    assert "on_result=publish_ready" not in source
+    assert "integrated_grouped_representatives_same_stem" in source
+
+    assert ".click()" not in browser
+    assert "no post-page retry will start" in browser
+    assert "completed during the main analysis" in browser
 
 
 def test_group_checks_three_representatives_not_every_timestamp(monkeypatch):
