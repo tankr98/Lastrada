@@ -145,7 +145,7 @@ jobs:
       - name: Keep the current frontend flow and publish matching assets
         run: |
           set -euo pipefail
-          API_URL="$(gcloud run services describe lastrada-api \
+          export API_URL="$(gcloud run services describe lastrada-api \
             --project "${PROJECT_ID}" \
             --region "${REGION}" \
             --format='value(status.url)')"
@@ -172,8 +172,6 @@ jobs:
             --project "${PROJECT_ID}" \
             --config firebase.json \
             --non-interactive
-        env:
-          API_URL: ${{ env.API_URL }}
 
       - name: Verify the deployed application and release order
         run: |
