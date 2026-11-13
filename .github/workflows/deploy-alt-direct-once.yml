@@ -1,0 +1,355 @@
+name: Deploy tested derivative-only matching
+
+on:
+  push:
+    branches: [local/stem-fast]
+    paths:
+      - .github/workflows/deploy-alt-direct-once.yml
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: lastrada-alt-direct-release
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    env:
+      APP_SHA: 46683e01c1018e1fe852f99d242a0c223c3c1150
+      APP_BRANCH: local/stem-fast
+      PROJECT: lastrada-64bab
+      REGION: us-central1
+      REGISTRY: us-central1-docker.pkg.dev
+      REPOSITORY: lastrada
+    steps:
+      - name: Check out the tested application commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.APP_SHA }}
+          fetch-depth: 1
+
+      - name: Require both validation workflows to pass
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          import time
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          sha = os.environ["APP_SHA"]
+          required = ("Synthetic validation", "Firebase web validation")
+
+          for _ in range(90):
+              runs = json.loads(
+                  subprocess.check_output(
+                      [
+                          "gh",
+                          "api",
+                          f"repos/{repository}/actions/runs?head_sha={sha}&per_page=100",
+                      ],
+                      text=True,
+                  )
+              )["workflow_runs"]
+              latest = {
+                  name: max(
+                      (
+                          run
+                          for run in runs
+                          if run["name"] == name
+                          and run["head_sha"] == sha
+                          and run["head_branch"] == "local/stem-fast"
+                      ),
+                      key=lambda run: run["id"],
+                      default=None,
+                  )
+                  for name in required
+              }
+              failed = [
+                  name
+                  for name, run in latest.items()
+                  if run
+                  and run.get("status") == "completed"
+                  and run.get("conclusion") != "success"
+              ]
+              if failed:
+                  raise SystemExit("Validation failed: " + ", ".join(failed))
+              if all(
+                  run
+                  and run.get("status") == "completed"
+                  and run.get("conclusion") == "success"
+                  for run in latest.values()
+              ):
+                  print("Validated application source:", sha)
+                  break
+              time.sleep(20)
+          else:
+              raise SystemExit("Timed out waiting for both validation workflows")
+          PY
+
+      - name: Select the existing deployment credential
+        env:
+          FIREBASE_SA: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_LASTRADA_64BAB || secrets.FIREBASE_SERVICE_ACCOUNT || secrets.GCP_SA_KEY || secrets.GOOGLE_CREDENTIALS || secrets.GCP_CREDENTIALS }}
+        run: |
+          set -euo pipefail
+          if [ -z "${FIREBASE_SA}" ]; then
+            echo "No existing deployment credential is configured." >&2
+            exit 1
+          fi
+          umask 077
+          printf '%s' "${FIREBASE_SA}" > "${RUNNER_TEMP}/lastrada-deploy-account.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=${RUNNER_TEMP}/lastrada-deploy-account.json" >> "${GITHUB_ENV}"
+
+      - name: Set up Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: lastrada-64bab
+
+      - name: Authenticate and verify the existing targets
+        run: |
+          set -euo pipefail
+          gcloud auth activate-service-account \
+            --key-file="${GOOGLE_APPLICATION_CREDENTIALS}" \
+            --project="${PROJECT}"
+          gcloud run services describe lastrada-api \
+            --project="${PROJECT}" --region="${REGION}" --format=json > /tmp/api-before.json
+          gcloud run services describe lastrada-worker \
+            --project="${PROJECT}" --region="${REGION}" --format=json > /tmp/worker-before.json
+          gcloud run services get-iam-policy lastrada-api \
+            --project="${PROJECT}" --region="${REGION}" --format=json > /tmp/api-policy-before.json
+          gcloud run services get-iam-policy lastrada-worker \
+            --project="${PROJECT}" --region="${REGION}" --format=json > /tmp/worker-policy-before.json
+          gcloud artifacts repositories describe "${REPOSITORY}" \
+            --project="${PROJECT}" --location="${REGION}" --format=json > /tmp/repository.json
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          output = Path(os.environ["GITHUB_ENV"])
+
+          def service(role):
+              return json.loads(Path(f"/tmp/{role}-before.json").read_text())
+
+          def env_value(document, name):
+              values = document["spec"]["template"]["spec"]["containers"][0].get("env", [])
+              return next((item.get("value", "") for item in values if item.get("name") == name), "")
+
+          with output.open("a", encoding="utf-8") as handle:
+              for role in ("api", "worker"):
+                  document = service(role)
+                  prefix = "OLD_" + role.upper()
+                  handle.write(
+                      f"{prefix}_IMAGE={document['spec']['template']['spec']['containers'][0]['image']}\n"
+                  )
+                  handle.write(f"{prefix}_SHA={env_value(document, 'LASTRADA_BUILD_SHA')}\n")
+                  handle.write(
+                      f"{prefix}_BRANCH={env_value(document, 'LASTRADA_BUILD_BRANCH')}\n"
+                  )
+          PY
+
+      - name: Build and push the tested image without Cloud Build
+        run: |
+          set -euo pipefail
+          gcloud auth configure-docker "${REGISTRY}" --quiet
+          IMAGE_TAG="${REGISTRY}/${PROJECT}/${REPOSITORY}/app:direct-${APP_SHA:0:12}-${GITHUB_RUN_ID}"
+          echo "IMAGE_TAG=${IMAGE_TAG}" >> "${GITHUB_ENV}"
+          DOCKER_BUILDKIT=1 docker build \
+            -f deploy/Dockerfile \
+            --label "org.opencontainers.image.revision=${APP_SHA}" \
+            -t "${IMAGE_TAG}" \
+            .
+          docker push "${IMAGE_TAG}" | tee /tmp/docker-push.log
+          DIGEST=$(sed -n 's/^.*digest: \(sha256:[0-9a-f]\{64\}\).*$/\1/p' /tmp/docker-push.log | tail -1)
+          if ! [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Docker push did not return a valid immutable digest." >&2
+            exit 1
+          fi
+          IMAGE_REF="${IMAGE_TAG%:*}@${DIGEST}"
+          echo "IMAGE_REF=${IMAGE_REF}" >> "${GITHUB_ENV}"
+          echo "Published ${IMAGE_REF}"
+
+      - name: Deploy API and worker with automatic rollback
+        run: |
+          set -euo pipefail
+          WORKER_UPDATED=0
+          API_UPDATED=0
+
+          restore_service() {
+            local role="$1"
+            local image="$2"
+            local sha="$3"
+            local branch="$4"
+            gcloud run services update "lastrada-${role}" \
+              --project="${PROJECT}" \
+              --region="${REGION}" \
+              --image="${image}" \
+              --update-env-vars="^@^LASTRADA_BUILD_SHA=${sha}@LASTRADA_BUILD_BRANCH=${branch}" \
+              --quiet || true
+            gcloud run services update-traffic "lastrada-${role}" \
+              --project="${PROJECT}" \
+              --region="${REGION}" \
+              --to-latest \
+              --quiet || true
+          }
+
+          rollback() {
+            local status=$?
+            trap - ERR
+            echo "Release verification failed; restoring the previous revisions." >&2
+            if [ "${API_UPDATED}" = 1 ]; then
+              restore_service api "${OLD_API_IMAGE}" "${OLD_API_SHA}" "${OLD_API_BRANCH}"
+            fi
+            if [ "${WORKER_UPDATED}" = 1 ]; then
+              restore_service worker "${OLD_WORKER_IMAGE}" "${OLD_WORKER_SHA}" "${OLD_WORKER_BRANCH}"
+            fi
+            exit "${status}"
+          }
+          trap rollback ERR
+
+          gcloud run services update lastrada-worker \
+            --project="${PROJECT}" \
+            --region="${REGION}" \
+            --image="${IMAGE_REF}" \
+            --update-env-vars="^@^LASTRADA_BUILD_SHA=${APP_SHA}@LASTRADA_BUILD_BRANCH=${APP_BRANCH}" \
+            --quiet
+          WORKER_UPDATED=1
+          gcloud run services update-traffic lastrada-worker \
+            --project="${PROJECT}" --region="${REGION}" --to-latest --quiet
+
+          gcloud run services update lastrada-api \
+            --project="${PROJECT}" \
+            --region="${REGION}" \
+            --image="${IMAGE_REF}" \
+            --update-env-vars="^@^LASTRADA_BUILD_SHA=${APP_SHA}@LASTRADA_BUILD_BRANCH=${APP_BRANCH}" \
+            --quiet
+          API_UPDATED=1
+          gcloud run services update-traffic lastrada-api \
+            --project="${PROJECT}" --region="${REGION}" --to-latest --quiet
+
+          gcloud run services describe lastrada-api \
+            --project="${PROJECT}" --region="${REGION}" --format=json > /tmp/api-after.json
+          gcloud run services describe lastrada-worker \
+            --project="${PROJECT}" --region="${REGION}" --format=json > /tmp/worker-after.json
+          gcloud run services get-iam-policy lastrada-api \
+            --project="${PROJECT}" --region="${REGION}" --format=json > /tmp/api-policy-after.json
+          gcloud run services get-iam-policy lastrada-worker \
+            --project="${PROJECT}" --region="${REGION}" --format=json > /tmp/worker-policy-after.json
+
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          from urllib.request import urlopen
+
+          sha = os.environ["APP_SHA"]
+          branch = os.environ["APP_BRANCH"]
+          image = os.environ["IMAGE_REF"]
+
+          def read(path):
+              return json.loads(Path(path).read_text())
+
+          def env_map(document):
+              return {
+                  item["name"]: item.get("value", "")
+                  for item in document["spec"]["template"]["spec"]["containers"][0].get("env", [])
+              }
+
+          def stable(document):
+              template = document["spec"]["template"]
+              spec = template["spec"]
+              annotations = template.get("metadata", {}).get("annotations", {})
+              top = document.get("metadata", {}).get("annotations", {})
+              environment = env_map(document)
+              environment.pop("LASTRADA_BUILD_SHA", None)
+              environment.pop("LASTRADA_BUILD_BRANCH", None)
+              return {
+                  "identity": spec["serviceAccountName"],
+                  "resources": spec["containers"][0]["resources"],
+                  "concurrency": spec["containerConcurrency"],
+                  "timeout": spec["timeoutSeconds"],
+                  "environment": environment,
+                  "scaling": {
+                      key: value
+                      for key, value in annotations.items()
+                      if key.startswith("autoscaling.")
+                      or key
+                      in {
+                          "run.googleapis.com/cpu-throttling",
+                          "run.googleapis.com/startup-cpu-boost",
+                          "run.googleapis.com/execution-environment",
+                      }
+                  },
+                  "service": {
+                      key: value
+                      for key, value in top.items()
+                      if key
+                      in {
+                          "run.googleapis.com/ingress",
+                          "run.googleapis.com/minScale",
+                          "run.googleapis.com/maxScale",
+                          "run.googleapis.com/invoker-iam-disabled",
+                      }
+                  },
+              }
+
+          def bindings(policy):
+              return sorted(
+                  json.dumps(
+                      {**binding, "members": sorted(binding.get("members", []))},
+                      sort_keys=True,
+                  )
+                  for binding in policy.get("bindings", [])
+              )
+
+          services = {}
+          for role in ("api", "worker"):
+              before = read(f"/tmp/{role}-before.json")
+              after = read(f"/tmp/{role}-after.json")
+              services[role] = after
+              if stable(before) != stable(after):
+                  raise SystemExit(f"Stable Cloud Run settings changed on lastrada-{role}")
+              if bindings(read(f"/tmp/{role}-policy-before.json")) != bindings(
+                  read(f"/tmp/{role}-policy-after.json")
+              ):
+                  raise SystemExit(f"IAM changed on lastrada-{role}")
+              environment = env_map(after)
+              actual_image = after["spec"]["template"]["spec"]["containers"][0]["image"]
+              if environment.get("LASTRADA_BUILD_SHA") != sha:
+                  raise SystemExit(f"Wrong build SHA on lastrada-{role}")
+              if environment.get("LASTRADA_BUILD_BRANCH") != branch:
+                  raise SystemExit(f"Wrong build branch on lastrada-{role}")
+              if actual_image != image:
+                  raise SystemExit(f"Wrong image on lastrada-{role}: {actual_image}")
+
+          api_url = services["api"]["status"]["url"].rstrip("/")
+          with urlopen(api_url + "/health", timeout=60) as response:
+              health = json.load(response)
+          expected = {
+              "status": "ok",
+              "branch": branch,
+              "commit": sha,
+              "profile": "stem-fast",
+          }
+          for key, value in expected.items():
+              if health.get(key) != value:
+                  raise SystemExit(f"API health mismatch for {key}: {health.get(key)!r}")
+
+          with urlopen("https://lastrada-alt.web.app/config.json", timeout=60) as response:
+              config = json.load(response)
+          if config.get("apiBase", "").rstrip("/") != api_url:
+              raise SystemExit("Firebase Hosting points to a different API")
+          print(json.dumps({"api": api_url, "image": image, "health": health}, indent=2))
+          PY
+
+          trap - ERR
+
+      - name: Remove temporary credentials
+        if: always()
+        run: rm -f "${RUNNER_TEMP}/lastrada-deploy-account.json"
