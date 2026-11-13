@@ -51,7 +51,7 @@ jobs:
           python -m py_compile run-local.py
           && python run-local.py --help
           && bash -n Start-Lastrada.command
-      - run: node --check web/public/app.js
+      - run: node --check web/public/app.js && node --check web/public/analysis-progress.js
       - run: >-
           npm ci --prefix web
           && cd web
@@ -189,6 +189,9 @@ jobs:
           curl --fail --silent --show-error --retry 12 --retry-delay 5 \
             "${SITE_URL}/auto-instruments.js?release=${GITHUB_SHA}" \
             --output /tmp/auto-instruments.js
+          curl --fail --silent --show-error --retry 12 --retry-delay 5 \
+            "${SITE_URL}/analysis-progress.js?release=${GITHUB_SHA}" \
+            --output /tmp/analysis-progress.js
           python - <<'PY'
           import json
           import os
@@ -211,8 +214,14 @@ jobs:
               raise SystemExit('The deployed review page can still launch a post-load stem job')
           if 'completed during the main analysis' not in script:
               raise SystemExit('The deployed integrated stem status copy is missing')
+          progress = Path('/tmp/analysis-progress.js').read_text()
+          if 'Stage ${Math.min(index + 1, stages.length)}' not in progress:
+              raise SystemExit('The deployed stage progress display is missing')
+          if 'instrument_progress' not in progress:
+              raise SystemExit('The deployed stage progress display is not reading backend progress')
           PY
           cmp web/public/auto-instruments.js /tmp/auto-instruments.js
+          cmp web/public/analysis-progress.js /tmp/analysis-progress.js
 
       - name: Remove temporary credentials
         if: always()
