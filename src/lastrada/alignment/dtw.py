@@ -1,9 +1,10 @@
-"""Guarded chroma + subsequence DTW refinement for SampleID candidates.
+"""Guarded feature + subsequence DTW refinement for SampleID candidates.
 
 This module is intentionally a *refiner*, not a detector. It only runs after
-SampleID has proposed a source/new-work interval pair. If DTW cannot produce a
-plausible alignment under conservative duration-ratio guardrails, the original
-coarse candidate is returned unchanged.
+SampleID has proposed a source/new-work interval pair. Harmonic material uses
+chroma features, while percussion can use a transient/onset representation. If
+DTW cannot produce a plausible alignment under conservative guardrails, the
+original coarse candidate is returned unchanged.
 """
 
 from __future__ import annotations
@@ -42,7 +43,9 @@ def _resample(samples: np.ndarray, source_rate: int, target_rate: int) -> np.nda
     if source_rate == target_rate:
         return samples.astype(np.float32, copy=False)
     divisor = math.gcd(source_rate, target_rate)
-    return resample_poly(samples, target_rate // divisor, source_rate // divisor).astype(np.float32)
+    return resample_poly(samples, target_rate // divisor, source_rate // divisor).astype(
+        np.float32
+    )
 
 
 def _segment(audio, start: float, end: float, sample_rate: int) -> np.ndarray:
@@ -98,6 +101,67 @@ def _chroma(
     norms = np.linalg.norm(chroma, axis=0, keepdims=True)
     chroma /= np.maximum(norms, 1e-12)
     return chroma
+
+
+def _onset_features(
+    samples: np.ndarray,
+    sample_rate: int,
+    nperseg: int = 1024,
+    hop: int = 256,
+    context_frames: int = 9,
+):
+    """Return normalized transient-context vectors and the unscaled flux.
+
+    The representation intentionally ignores stable pitch. It is suited to drum
+    and percussion evidence where chroma can be nearly stationary even when the
+    copied rhythmic sequence is distinctive.
+    """
+    if len(samples) < max(512, nperseg // 2):
+        return (
+            np.empty((context_frames, 0), dtype=np.float64),
+            np.empty(0, dtype=np.float64),
+        )
+
+    frame_size = min(nperseg, len(samples))
+    frequencies, _, z = stft(
+        samples,
+        fs=sample_rate,
+        nperseg=frame_size,
+        noverlap=max(0, frame_size - hop),
+        boundary=None,
+        padded=True,
+    )
+    magnitude = np.abs(z).astype(np.float64)
+    valid = (frequencies >= 60.0) & (frequencies <= min(8000.0, sample_rate / 2.0))
+    magnitude = magnitude[valid]
+    if not magnitude.shape[0]:
+        return (
+            np.empty((context_frames, 0), dtype=np.float64),
+            np.empty(0, dtype=np.float64),
+        )
+
+    log_magnitude = np.log1p(10.0 * magnitude)
+    flux = np.maximum(log_magnitude[:, 1:] - log_magnitude[:, :-1], 0.0).mean(axis=0)
+    raw_flux = np.concatenate(([0.0], flux))
+
+    # Suppress the broadband floor before normalizing. Dense noise has a high
+    # floor and little relative variation; copied transients remain sparse peaks.
+    envelope = np.maximum(raw_flux - np.median(raw_flux), 0.0)
+    scale = float(np.percentile(envelope, 95)) if envelope.size else 0.0
+    if scale > 1e-12:
+        envelope = np.clip(envelope / scale, 0.0, 3.0)
+    envelope = np.sqrt(envelope)
+
+    left = context_frames // 2
+    right = context_frames - 1 - left
+    padded = np.pad(envelope, (left, right))
+    features = np.stack(
+        [padded[index : index + len(envelope)] for index in range(context_frames)],
+        axis=0,
+    )
+    norms = np.linalg.norm(features, axis=0, keepdims=True)
+    features /= np.maximum(norms, 1e-12)
+    return features, raw_flux
 
 
 def _local_cost(source: np.ndarray, target: np.ndarray) -> np.ndarray:
@@ -186,7 +250,7 @@ def refine_candidate_dtw_details(
     analysis_rate: int = 16000,
     hop: int = 512,
 ) -> DTWRefinementResult:
-    """Refine one candidate and return alignment evidence plus the interval."""
+    """Refine one harmonic candidate and return alignment evidence."""
     if interval.original_start is None or interval.original_end is None:
         return _rejected(interval, "source timestamps unavailable")
     if interval.original_end <= interval.original_start:
@@ -316,6 +380,159 @@ def refine_candidate_dtw_details(
         search_start=search_start,
         search_end=search_end,
         path_points=best["path_points"],
+    )
+
+
+def refine_candidate_rhythm_details(
+    original,
+    new,
+    interval: Interval,
+    *,
+    search_padding: float = 4.0,
+    minimum_duration_ratio: float = 0.5,
+    maximum_duration_ratio: float = 1.5,
+    minimum_duration: float = 0.5,
+    analysis_rate: int = 16000,
+    hop: int = 256,
+) -> DTWRefinementResult:
+    """Refine a percussion candidate with transient/onset DTW evidence."""
+    if interval.original_start is None or interval.original_end is None:
+        return _rejected(interval, "source timestamps unavailable")
+    if interval.original_end <= interval.original_start:
+        return _rejected(interval, "invalid source interval")
+
+    source_duration = interval.original_end - interval.original_start
+    if source_duration < minimum_duration:
+        return _rejected(
+            interval,
+            "source interval shorter than minimum duration",
+            source_duration=source_duration,
+        )
+
+    search_start = max(0.0, interval.new_start - search_padding)
+    search_end = min(new.duration, interval.new_end + search_padding)
+    if search_end - search_start < minimum_duration:
+        return _rejected(
+            interval,
+            "derivative search region shorter than minimum duration",
+            source_duration=source_duration,
+            search_start=search_start,
+            search_end=search_end,
+        )
+
+    source_y = _segment(
+        original,
+        interval.original_start,
+        interval.original_end,
+        analysis_rate,
+    )
+    target_y = _segment(new, search_start, search_end, analysis_rate)
+    source_features, source_flux = _onset_features(source_y, analysis_rate, hop=hop)
+    target_features, target_flux = _onset_features(target_y, analysis_rate, hop=hop)
+
+    if source_features.shape[1] < 2 or target_features.shape[1] < 2:
+        return _rejected(
+            interval,
+            "not enough onset frames",
+            source_duration=source_duration,
+            search_start=search_start,
+            search_end=search_end,
+        )
+
+    source_peak = float(np.max(source_flux, initial=0.0))
+    source_variation = float(np.std(source_flux) / max(np.mean(source_flux), 1e-12))
+    target_peak = float(np.max(target_flux, initial=0.0))
+    target_variation = float(np.std(target_flux) / max(np.mean(target_flux), 1e-12))
+    if source_peak < 1e-4 or source_variation < 0.5:
+        return _rejected(interval, "insufficient transient structure in source passage")
+    if target_peak < 1e-6 or target_variation < 0.3:
+        return _rejected(interval, "insufficient transient structure in derivative stem")
+
+    path, mean_cost = _subsequence_dtw(_local_cost(source_features, target_features))
+    if path is None or not len(path):
+        return _rejected(
+            interval,
+            "no rhythmic alignment path",
+            source_duration=source_duration,
+            search_start=search_start,
+            search_end=search_end,
+        )
+
+    _, reversed_cost = _subsequence_dtw(
+        _local_cost(source_features[:, ::-1], target_features)
+    )
+    if mean_cost > 0.62 or reversed_cost - mean_cost < 0.08:
+        return _rejected(
+            interval,
+            "no distinctive rhythmic alignment passed onset and order guardrails",
+            source_duration=source_duration,
+            search_start=search_start,
+            search_end=search_end,
+        )
+
+    seconds_per_frame = hop / analysis_rate
+    matched_target_frames = path[:, 1]
+    refined_start = search_start + float(matched_target_frames.min()) * seconds_per_frame
+    refined_end = (
+        search_start
+        + float(matched_target_frames.max()) * seconds_per_frame
+        + min(1024, len(source_y)) / analysis_rate
+    )
+    refined_start = max(0.0, refined_start)
+    refined_end = min(new.duration, refined_end)
+    derivative_duration = refined_end - refined_start
+
+    if derivative_duration < minimum_duration:
+        return _rejected(
+            interval,
+            "rhythmic alignment shorter than minimum duration",
+            source_duration=source_duration,
+            search_start=search_start,
+            search_end=search_end,
+        )
+    if not duration_ratio_is_plausible(
+        source_duration,
+        derivative_duration,
+        minimum_duration_ratio,
+        maximum_duration_ratio,
+    ):
+        return _rejected(
+            interval,
+            "rhythmic alignment failed duration guardrails",
+            source_duration=source_duration,
+            search_start=search_start,
+            search_end=search_end,
+        )
+    if refined_end <= interval.new_start or refined_start >= interval.new_end:
+        return _rejected(
+            interval,
+            "rhythmic alignment did not overlap the candidate interval",
+            source_duration=source_duration,
+            search_start=search_start,
+            search_end=search_end,
+        )
+
+    refined = Interval(
+        new_start=float(refined_start),
+        new_end=float(refined_end),
+        original_start=interval.original_start,
+        original_end=interval.original_end,
+        source="dtw_onset_local_alignment",
+        status="candidate",
+        similarity=interval.similarity,
+    )
+    return DTWRefinementResult(
+        interval=refined,
+        accepted=True,
+        reason="rhythmic onset alignment passed order and duration guardrails; listening required",
+        mean_cost=float(mean_cost),
+        pitch_shift_semitones=None,
+        duration_ratio=float(derivative_duration / source_duration),
+        source_duration=source_duration,
+        derivative_duration=float(derivative_duration),
+        search_start=search_start,
+        search_end=search_end,
+        path_points=int(len(path)),
     )
 
 

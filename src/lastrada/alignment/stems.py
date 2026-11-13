@@ -1,17 +1,26 @@
-"""Compare candidate regions across estimated Demucs stems.
+"""Compare an original full-mix passage with estimated derivative stems.
 
-Stem labels and audio are model estimates. Results are supporting evidence only;
-they do not establish that the sampled element is definitively guitar, vocals,
-drums, or another instrument.
+By default Demucs runs only on the derivative candidate region. Each derivative
+stem is compared with the timestamped original full-mix passage, avoiding the
+requirement that Demucs classify both recordings in exactly the same way. Stem
+labels and audio remain model estimates and are supporting evidence only.
 """
 
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
+from pathlib import Path
 
-from lastrada.alignment.dtw import refine_candidate_dtw_details
+import numpy as np
+
+from lastrada.alignment.dtw import (
+    refine_candidate_dtw_details,
+    refine_candidate_rhythm_details,
+)
+from lastrada.audio.io import Audio
 from lastrada.schemas.models import Interval
+from lastrada.separation.demucs import SeparatedRegion
 
 
 @dataclass
@@ -72,8 +81,14 @@ def candidate_stem_pairs(
     *,
     include_cross_other: bool = True,
     include_full_mix: bool = True,
+    source_full_mix: bool = False,
 ):
-    """Return conservative stem pairs, avoiding an all-by-all explosion."""
+    """Return conservative comparison labels without an all-by-all explosion.
+
+    With ``source_full_mix=True``, the left-hand stem label is a logical
+    instrument hypothesis for downstream compatibility. The actual source audio
+    for every non-baseline pair is the same original full-mix crop.
+    """
 
     source = set(source_stems)
     derivative = set(derivative_stems)
@@ -88,6 +103,17 @@ def candidate_stem_pairs(
         "vocals",
         "other",
     ]
+
+    if source_full_mix:
+        if "full_mix" not in source:
+            return ordered
+        for stem in preferred_order:
+            if stem == "full_mix" and not include_full_mix:
+                continue
+            if stem in derivative:
+                ordered.append((stem, stem))
+        return ordered
+
     for stem in preferred_order:
         if stem == "full_mix" and not include_full_mix:
             continue
@@ -138,6 +164,32 @@ def probe_is_partial(probe, interval):
     )
 
 
+def _full_mix_region(audio, start: float, end: float, padding_seconds: float):
+    if end <= start:
+        raise ValueError("Candidate end must be after start")
+    if padding_seconds < 0:
+        raise ValueError("Stem-separation padding cannot be negative")
+
+    crop_start = max(0.0, float(start) - padding_seconds)
+    crop_end = min(float(audio.duration), float(end) + padding_seconds)
+    left = max(0, int(round(crop_start * audio.sample_rate)))
+    right = min(len(audio.samples), int(round(crop_end * audio.sample_rate)))
+    if right <= left:
+        raise ValueError("Original full-mix crop is empty")
+
+    samples = np.asarray(audio.samples[left:right], dtype=np.float32).copy()
+    crop = Audio(samples, int(audio.sample_rate), len(samples) / float(audio.sample_rate))
+    return SeparatedRegion(
+        stems={"full_mix": crop},
+        offset_seconds=crop_start,
+        candidate_start_local=max(0.0, float(start) - crop_start),
+        candidate_end_local=max(0.0, float(end) - crop_start),
+        crop_duration=crop.duration,
+        model_name="original_full_mix",
+        cache_path=Path("."),
+    )
+
+
 def compare_candidate_stems(
     original,
     new,
@@ -152,11 +204,17 @@ def compare_candidate_stems(
     minimum_duration: float = 0.5,
     include_cross_other: bool = True,
     include_full_mix: bool = True,
+    source_full_mix: bool = True,
     parallel_separation: bool = False,
     parallel_dtw: bool = False,
     dtw_workers: int = 2,
 ) -> StemComparisonResult:
-    """Compare bounded paired crops; return their exact scope with the evidence."""
+    """Compare bounded crops and return their exact evidence scope.
+
+    Production audio defaults to derivative-only Demucs. A defensive fallback to
+    the legacy two-sided separator path remains for callers that supply test
+    doubles without real ``Audio`` objects.
+    """
 
     if interval.original_start is None or interval.original_end is None:
         raise ValueError("Stem comparison requires source timestamps")
@@ -171,10 +229,28 @@ def compare_candidate_stems(
             padding_seconds=separation_padding,
         )
 
-    if parallel_separation:
-        # The legacy per-occurrence path can separate both sides concurrently.
-        # The grouped path instead parallelizes groups, avoiding nested model
-        # fan-out and excessive memory use.
+    use_source_full_mix = bool(
+        source_full_mix
+        and hasattr(original, "samples")
+        and hasattr(original, "sample_rate")
+        and hasattr(original, "duration")
+    )
+
+    if use_source_full_mix:
+        source_region = _full_mix_region(
+            original,
+            interval.original_start,
+            interval.original_end,
+            separation_padding,
+        )
+        derivative_region = separate(
+            new,
+            interval.new_start,
+            interval.new_end,
+        )
+    elif parallel_separation:
+        # Legacy compatibility for callers that explicitly provide a two-sided
+        # separator test double. Production uses the derivative-only path above.
         with ThreadPoolExecutor(max_workers=2) as pool:
             source = pool.submit(
                 separate,
@@ -215,29 +291,52 @@ def compare_candidate_stems(
         derivative_region.stems,
         include_cross_other=include_cross_other,
         include_full_mix=include_full_mix,
+        source_full_mix=use_source_full_mix,
     )
 
     def compare_pair(pair):
         source_stem, derivative_stem = pair
-        detail = refine_candidate_dtw_details(
-            source_region.stems[source_stem],
-            derivative_region.stems[derivative_stem],
-            local_interval,
-            search_padding=dtw_search_padding,
-            max_pitch_shift_semitones=max_pitch_shift_semitones,
-            minimum_duration_ratio=minimum_duration_ratio,
-            maximum_duration_ratio=maximum_duration_ratio,
-            minimum_duration=minimum_duration,
+        source_audio = (
+            source_region.stems["full_mix"]
+            if use_source_full_mix
+            else source_region.stems[source_stem]
         )
+        if derivative_stem == "drums":
+            detail = refine_candidate_rhythm_details(
+                source_audio,
+                derivative_region.stems[derivative_stem],
+                local_interval,
+                search_padding=dtw_search_padding,
+                minimum_duration_ratio=minimum_duration_ratio,
+                maximum_duration_ratio=maximum_duration_ratio,
+                minimum_duration=minimum_duration,
+            )
+        else:
+            detail = refine_candidate_dtw_details(
+                source_audio,
+                derivative_region.stems[derivative_stem],
+                local_interval,
+                search_padding=dtw_search_padding,
+                max_pitch_shift_semitones=max_pitch_shift_semitones,
+                minimum_duration_ratio=minimum_duration_ratio,
+                maximum_duration_ratio=maximum_duration_ratio,
+                minimum_duration=minimum_duration,
+            )
 
         local_refined = detail.interval
         refined_start = derivative_region.offset_seconds + local_refined.new_start
         refined_end = derivative_region.offset_seconds + local_refined.new_end
+        reason = detail.reason
+        if use_source_full_mix:
+            reason = (
+                f"original full-mix passage → derivative {derivative_stem}: "
+                f"{detail.reason}"
+            )
         return StemPairEvidence(
             source_stem=source_stem,
             derivative_stem=derivative_stem,
             accepted=detail.accepted,
-            reason=detail.reason,
+            reason=reason,
             mean_dtw_cost=detail.mean_cost,
             pitch_shift_semitones=detail.pitch_shift_semitones,
             duration_ratio=detail.duration_ratio,

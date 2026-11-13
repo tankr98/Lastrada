@@ -54,7 +54,8 @@ def test_600_second_direct_match_keeps_full_times_with_bounded_real_dtw(monkeypa
                         dtw_max_pitch_shift_semitones=0)
     updated, comparisons = pipeline.stem_assist_candidates(audio, audio, [direct], Separator(), settings)
     assert updated == [direct]
-    assert crops == [16, 16]
+    # The original is now cropped directly; only the derivative runs through Demucs.
+    assert crops == [16]
     assert matrices and max(a * b for a, b in matrices) <= 251 * 501
     comparison = comparisons[0]
     assert comparison.partial
@@ -70,7 +71,7 @@ def test_600_second_direct_match_keeps_full_times_with_bounded_real_dtw(monkeypa
     assert row.interval == direct and row.probe == comparison.probe
     assert row.status == "checked" and not row.context_only
     assert all("Checked portion only" in item.interpretation for item in row.evidence)
-    assert row.source_sounds and all(s.start == 296 and s.end == 304 for s in row.source_sounds)
+    assert not row.source_sounds
     assert "not the full interval" in row.reason
     print({"reported_seconds": 600, "probe_seconds": 8, "separated_crops": crops,
            "dtw_matrix_shapes": matrices})
