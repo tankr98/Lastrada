@@ -3,7 +3,7 @@
   "source_branch": "local/stem-fast",
   "stem_model": "htdemucs_6s",
   "initial_stem_candidates": 3,
-  "group_workers": 3,
+  "group_workers": 2,
   "group_representatives": 3,
   "group_positive_confirmations": 2,
   "group_negative_confirmations": 3,

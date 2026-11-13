@@ -19,6 +19,17 @@
     finalizing: 5,
     completed: 5,
   };
+  const stageOrder = {
+    queued: 0,
+    loading_audio: 1,
+    decoding_audio: 2,
+    preparing_matcher: 3,
+    matching: 4,
+    grouping: 5,
+    stem_analysis: 6,
+    finalizing: 7,
+    completed: 8,
+  };
   const fallbackLabel = {
     queued: "Waiting for an analysis worker",
     loading_audio: "Loading uploaded audio",
@@ -83,6 +94,37 @@
     return progress.stage || (state?.status === "running" ? "loading_audio" : "queued");
   }
 
+  function progressTimestamp(state) {
+    const value = Number(state?.instrument_progress?.updated);
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  function progressPercent(state) {
+    const value = Number(state?.instrument_progress?.percent);
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  function acceptState(next) {
+    if (!latestState || latestState.id !== next.id) return true;
+    if (next.status === "completed" || next.status === "failed") return true;
+    if (latestState.status === "completed" || latestState.status === "failed") return false;
+
+    const currentRank = stageOrder[normalizedStage(latestState)] ?? 0;
+    const nextRank = stageOrder[normalizedStage(next)] ?? 0;
+    if (nextRank < currentRank) return false;
+    if (nextRank > currentRank) return true;
+
+    const currentUpdated = progressTimestamp(latestState);
+    const nextUpdated = progressTimestamp(next);
+    if (currentUpdated && nextUpdated && nextUpdated < currentUpdated) return false;
+    if (
+      currentUpdated === nextUpdated &&
+      progressPercent(next) < progressPercent(latestState)
+    )
+      return false;
+    return true;
+  }
+
   function makePanel() {
     const panel = document.createElement("section");
     panel.id = "analysisStagePanel";
@@ -135,11 +177,15 @@
       ),
     );
     const label = progress.label || fallbackLabel[stage] || "Analyzing the tracks";
-    const detail =
+    let detail =
       progress.detail ||
       (latestState.status === "queued"
         ? "The request is saved and waiting for the analysis worker."
         : "The analysis worker is processing the tracks.");
+    const restartCount = Number(progress.restart_count) || 0;
+    if (restartCount > 0 && !detail.toLowerCase().includes("restart")) {
+      detail += ` The worker restarted ${restartCount === 1 ? "once" : `${restartCount} times`} and resumed from saved progress.`;
+    }
 
     setText(
       panel.querySelector("#analysisStageTitle"),
@@ -211,7 +257,7 @@
         .clone()
         .json()
         .then((state) => {
-          if (!state || !state.id || !state.status) return;
+          if (!state || !state.id || !state.status || !acceptState(state)) return;
           latestState = state;
           scheduleRender();
         })

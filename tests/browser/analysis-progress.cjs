@@ -71,17 +71,47 @@ try {
     assert(text.includes("Stage 5 of 6"));
     assert(text.includes("31 of 43 timestamp rows"));
 
+    // A retry or stale HTTP response must not move the displayed stage backwards.
     await page.evaluate(() => {
       window.__analysisProgressFixture = {
         ...window.__analysisProgressFixture,
         instrument_progress: {
-          ...window.__analysisProgressFixture.instrument_progress,
-          updated: Date.now() / 1000 - 7200,
+          stage: "preparing_matcher",
+          label: "Preparing Sony SampleID",
+          percent: 20,
+          detail: "The Sony SampleID checkpoint is being prepared and verified.",
+          updated: Date.now() / 1000 + 1,
+          stage_started: Date.now() / 1000,
         },
       };
     });
     await page.evaluate(() =>
       fetch("https://api.lastrada.test/api/analyses/79c3b790-197b-41ef-99b7-a7a56b8da014"),
+    );
+    await page.waitForTimeout(100);
+    text = await page.locator("#analysisStagePanel").innerText();
+    assert(text.includes("Stage 5 of 6"));
+    assert(text.includes("78%"));
+    assert(!text.includes("Preparing Sony SampleID"));
+
+    // A genuinely stale analysis still surfaces the inactivity warning.
+    await page.evaluate(() => {
+      window.__analysisProgressFixture = {
+        id: "e4fa08f8-5c51-4cf8-9d67-aa9eb34cb901",
+        status: "running",
+        operation: "analyze",
+        instrument_progress: {
+          stage: "stem_analysis",
+          label: "Separating stems and checking like-for-like matches",
+          percent: 78,
+          detail: "Grouped Demucs and same-stem DTW are running.",
+          updated: Date.now() / 1000 - 7200,
+          stage_started: Date.now() / 1000 - 7200,
+        },
+      };
+    });
+    await page.evaluate(() =>
+      fetch("https://api.lastrada.test/api/analyses/e4fa08f8-5c51-4cf8-9d67-aa9eb34cb901"),
     );
     await page.waitForFunction(() =>
       document.querySelector("#analysisStageWarning")?.hidden === false,

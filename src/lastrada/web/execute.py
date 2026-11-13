@@ -20,6 +20,61 @@ STAGE_LABELS = {
     "completed": "Analysis complete",
 }
 
+STAGE_ORDER = {
+    "loading_audio": 1,
+    "decoding_audio": 2,
+    "preparing_matcher": 3,
+    "matching": 4,
+    "grouping": 5,
+    "stem_analysis": 6,
+    "finalizing": 7,
+    "completed": 8,
+}
+
+RESUMABLE_STAGES = {"stem_analysis", "finalizing"}
+
+
+def _stage_rank(stage):
+    return STAGE_ORDER.get(stage, -1)
+
+
+def _merge_progress(current, incoming):
+    """Keep progress monotonic across stale responses and worker retries."""
+
+    current = dict(current or {})
+    incoming = dict(incoming or {})
+    current_stage = current.get("stage")
+    incoming_stage = incoming.get("stage")
+    current_rank = _stage_rank(current_stage)
+    incoming_rank = _stage_rank(incoming_stage)
+
+    if current_rank > incoming_rank:
+        return current, False
+    if current_rank == incoming_rank and current_rank >= 0:
+        current_updated = float(current.get("updated") or 0)
+        incoming_updated = float(incoming.get("updated") or 0)
+        if current_updated > incoming_updated:
+            return current, False
+        incoming["percent"] = max(
+            int(current.get("percent") or 0),
+            int(incoming.get("percent") or 0),
+        )
+        if current.get("stage_started"):
+            incoming["stage_started"] = current["stage_started"]
+        incoming["restart_count"] = max(
+            int(current.get("restart_count") or 0),
+            int(incoming.get("restart_count") or 0),
+        )
+    return incoming, True
+
+
+def _resumable_stage(state):
+    progress = state.get("instrument_progress") or {}
+    stage = progress.get("stage")
+    if state.get("status") == "running" and stage in RESUMABLE_STAGES:
+        return stage
+    return None
+
 
 def checkpoint():
     import requests
@@ -57,7 +112,7 @@ def checkpoint():
 
 
 def execute(owner, analysis_id, operation, task_id):
-    from google.api_core.exceptions import PreconditionFailed
+    from google.api_core.exceptions import NotFound, PreconditionFailed
     from lastrada.web.cloud import Cases, prefix
     from lastrada.audio.io import decode
     from lastrada.web.profile import analysis_settings, PROFILE
@@ -73,11 +128,31 @@ def execute(owner, analysis_id, operation, task_id):
 
     repo = Cases()
     root = prefix(owner, analysis_id)
-    state, generation = repo.read(root + "/case.json")
+    state, _generation = repo.read(root + "/case.json")
     if state.get("task_id") != task_id or state["status"] == "completed":
         return
 
-    stage_state = {"name": None, "started": time.time()}
+    previous_progress = state.get("instrument_progress") or {}
+    resume_stage = _resumable_stage(state) if operation == "analyze" else None
+    restart_count = int(previous_progress.get("restart_count") or 0)
+    resume_result = None
+    if resume_stage:
+        try:
+            data, _ = repo.read(root + "/result.json")
+            candidate = Analysis.model_validate(data)
+            if (
+                candidate.methods.get("stem_strategy")
+                == "integrated_grouped_representatives_same_stem"
+            ):
+                resume_result = candidate
+                restart_count += 1
+        except (NotFound, ValueError):
+            resume_stage = None
+
+    stage_state = {
+        "name": previous_progress.get("stage"),
+        "started": float(previous_progress.get("stage_started") or time.time()),
+    }
 
     def publish_progress(
         stage,
@@ -92,10 +167,9 @@ def execute(owner, analysis_id, operation, task_id):
         now = time.time()
         if stage_state["name"] != stage:
             stage_state.update(name=stage, started=now)
-        if partial is not None:
-            partial.methods["web_profile"] = PROFILE["name"]
-            repo.write(root + "/result.json", partial.model_dump(mode="json"))
-        progress = dict(counts or (instrument_progress(partial) if partial is not None else {}))
+        progress = dict(
+            counts or (instrument_progress(partial) if partial is not None else {})
+        )
         progress.update(
             stage=stage,
             label=STAGE_LABELS[stage],
@@ -103,21 +177,34 @@ def execute(owner, analysis_id, operation, task_id):
             detail=detail,
             updated=now,
             stage_started=stage_state["started"],
+            restart_count=restart_count,
         )
-        for attempt in range(2):
+        for attempt in range(3):
             current, revision = repo.read(root + "/case.json")
-            if current.get("task_id") != task_id:
+            if current.get("task_id") != task_id or current.get("status") == "completed":
                 return False
+            merged, accepted = _merge_progress(
+                current.get("instrument_progress"),
+                progress,
+            )
+            if not accepted:
+                return False
+            if partial is not None:
+                partial.methods["web_profile"] = PROFILE["name"]
+                repo.write(
+                    root + "/result.json",
+                    partial.model_dump(mode="json"),
+                )
             current.update(
                 status="running",
                 started=current.get("started", now),
-                instrument_progress=progress,
+                instrument_progress=merged,
             )
             try:
                 repo.write(root + "/case.json", current, revision)
                 return True
             except PreconditionFailed:
-                if attempt:
+                if attempt == 2:
                     raise
         return False
 
@@ -159,6 +246,45 @@ def execute(owner, analysis_id, operation, task_id):
                 counts=counts,
             )
 
+        def complete_grouped_stems(result, *, resumed=False):
+            if not settings.stem_group_enabled:
+                result.methods["instruments"] = (
+                    "not_run: grouped stem analysis disabled"
+                )
+                return result
+            try:
+                detail = (
+                    "The analysis worker restarted during Demucs and safely resumed from saved grouped progress."
+                    if resumed
+                    else "Representative occurrences are being separated with Demucs before like-for-like stem DTW."
+                )
+                current_percent = int(previous_progress.get("percent") or 62)
+                publish_progress(
+                    "stem_analysis",
+                    max(62, current_percent),
+                    detail,
+                    partial=result,
+                )
+                return run_grouped_instruments(
+                    result,
+                    original,
+                    new,
+                    settings,
+                    on_progress=save_instruments,
+                    budget_seconds=1200,
+                    max_new_checks=100,
+                )
+            except (OSError, RuntimeError, ValueError) as error:
+                result.methods["instruments"] = (
+                    "unavailable: integrated grouped stem analysis failed "
+                    f"({type(error).__name__}: {error})"
+                )
+                result.warnings.append(
+                    "Grouped Demucs and same-stem DTW could not finish. "
+                    "Sony and full-mix timing evidence is preserved."
+                )
+                return result
+
         if operation == "stems":
             # Compatibility path for analyses created before the integrated
             # pipeline. New analyses already contain grouped stem evidence and
@@ -177,6 +303,10 @@ def execute(owner, analysis_id, operation, task_id):
                 settings,
                 on_progress=save_instruments,
             )
+        elif resume_result is not None:
+            result = resume_result
+            if resume_stage == "stem_analysis":
+                result = complete_grouped_stems(result, resumed=True)
         else:
             credits = state["credits"]
             intake = Intake(
@@ -261,40 +391,7 @@ def execute(owner, analysis_id, operation, task_id):
                 root + "/comparison.json",
                 json.loads(comparison.to_json()),
             )
-
-            # Complete grouped Demucs and same-stem DTW before releasing the
-            # timestamp review or Nature of Use draft. Progress may be persisted,
-            # but result_ready is not set while this work is running.
-            if settings.stem_group_enabled:
-                try:
-                    publish_progress(
-                        "stem_analysis",
-                        62,
-                        "Representative occurrences are being separated with Demucs before like-for-like stem DTW.",
-                        partial=result,
-                    )
-                    result = run_grouped_instruments(
-                        result,
-                        original,
-                        new,
-                        settings,
-                        on_progress=save_instruments,
-                        budget_seconds=1200,
-                        max_new_checks=100,
-                    )
-                except (OSError, RuntimeError, ValueError) as error:
-                    result.methods["instruments"] = (
-                        "unavailable: integrated grouped stem analysis failed "
-                        f"({type(error).__name__}: {error})"
-                    )
-                    result.warnings.append(
-                        "Grouped Demucs and same-stem DTW could not finish. "
-                        "Sony and full-mix timing evidence is preserved."
-                    )
-            else:
-                result.methods["instruments"] = (
-                    "not_run: grouped stem analysis disabled"
-                )
+            result = complete_grouped_stems(result)
 
         publish_progress(
             "finalizing",
@@ -315,6 +412,7 @@ def execute(owner, analysis_id, operation, task_id):
             detail="Sony, full-mix DTW, grouping, Demucs and same-stem DTW have finished.",
             updated=now,
             stage_started=now,
+            restart_count=restart_count,
         )
         state.update(
             status="completed",
