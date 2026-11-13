@@ -87,7 +87,7 @@ def test_deployed_profile_integrates_grouped_backend_before_result_release():
     assert '"stem_enabled": False' in source
 
     sony = source.index("result = analyze_pair")
-    grouped = source.index("result = run_grouped_instruments", sony)
+    grouped = source.index("result = complete_grouped_stems(result)", sony)
     completed = source.index('status="completed"', grouped)
     released = source.index("result_ready=True", completed)
     assert sony < grouped < completed < released
