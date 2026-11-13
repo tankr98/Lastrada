@@ -79,7 +79,7 @@ def test_deployed_profile_integrates_grouped_backend_before_result_release():
     browser = (ROOT / "web/public/auto-instruments.js").read_text()
 
     assert settings.stem_group_enabled
-    assert settings.stem_group_workers == 3
+    assert settings.stem_group_workers == 2
     assert settings.stem_group_max_representatives == 3
     assert settings.stem_group_positive_confirmations == 2
     assert settings.stem_group_negative_confirmations == 3
