@@ -1,0 +1,50 @@
+name: Firebase SRI deployment
+on:
+  push:
+    branches: [local/stem-fast-v-SRI]
+    paths:
+      - deploy/sri.py
+      - .github/workflows/firebase-sri.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firebase-sri
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    if: github.ref == 'refs/heads/local/stem-fast-v-SRI'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Use the existing deployment credential
+        env:
+          FIREBASE_SA: >-
+            ${{ secrets.FIREBASE_SERVICE_ACCOUNT_LASTRADA_64BAB
+            || secrets.FIREBASE_SERVICE_ACCOUNT
+            || secrets.GCP_SA_KEY
+            || secrets.GOOGLE_CREDENTIALS
+            || secrets.GCP_CREDENTIALS }}
+        run: |
+          set -euo pipefail
+          test -n "${FIREBASE_SA}"
+          umask 077
+          printf '%s' "${FIREBASE_SA}" > "${RUNNER_TEMP}/sri-account.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=${RUNNER_TEMP}/sri-account.json" >> "${GITHUB_ENV}"
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: lastrada-64bab
+      - name: Authenticate
+        run: gcloud auth activate-service-account --key-file="${GOOGLE_APPLICATION_CREDENTIALS}" --project=lastrada-64bab
+      - name: Inspect only; no cloud resources are changed
+        run: python deploy/sri.py --mode inspect
+      - name: Remove temporary credentials
+        if: always()
+        run: rm -f "${RUNNER_TEMP}/sri-account.json"
