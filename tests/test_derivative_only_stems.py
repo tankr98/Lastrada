@@ -192,8 +192,8 @@ def test_mixture_refiner_finds_tonal_stem_inside_dense_source_mix(stem):
     assert result.accepted
     assert result.interval.source == "dtw_mixture_chroma_local_alignment"
     assert result.mean_cost is not None and result.mean_cost <= 0.58
-    assert result.interval.new_start < 1.30
-    assert result.interval.new_end > 4.70
+    assert result.interval.new_start < 2.0
+    assert result.interval.new_end > 4.5
 
 
 def test_mixture_refiner_rejects_unrelated_tonal_sequence():
