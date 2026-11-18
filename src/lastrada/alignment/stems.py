@@ -316,8 +316,8 @@ def compare_candidate_stems(
             )
         elif use_source_full_mix and derivative_stem != "full_mix":
             # Symmetric stem-to-stem chroma distance is inappropriate when the
-            # source side is a dense mix. Use an asymmetric containment matcher
-            # and then a transient-order fallback for rhythmic tonal material.
+            # source side is a dense mix. Every pitched derivative stem instead
+            # uses asymmetric content containment plus mandatory order evidence.
             detail = refine_candidate_mixture_details(
                 source_audio,
                 derivative_audio,
@@ -329,22 +329,6 @@ def compare_candidate_stems(
                 maximum_duration_ratio=maximum_duration_ratio,
                 minimum_duration=minimum_duration,
             )
-            if not detail.accepted:
-                rhythmic = refine_candidate_rhythm_details(
-                    source_audio,
-                    derivative_audio,
-                    local_interval,
-                    search_padding=dtw_search_padding,
-                    minimum_duration_ratio=minimum_duration_ratio,
-                    maximum_duration_ratio=maximum_duration_ratio,
-                    minimum_duration=minimum_duration,
-                )
-                if rhythmic.accepted:
-                    detail = rhythmic
-                else:
-                    detail.reason = (
-                        f"{detail.reason}; transient fallback: {rhythmic.reason}"
-                    )
         else:
             detail = refine_candidate_dtw_details(
                 source_audio,
