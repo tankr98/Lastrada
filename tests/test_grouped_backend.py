@@ -52,9 +52,10 @@ def evidence(stem="drums", accepted=True):
     )
 
 
-def comparison(accepted=True):
+def comparison(accepted=True, stems=None):
+    stems = list(stems or ["drums"])
     return SimpleNamespace(
-        evidence=[evidence(accepted=accepted)],
+        evidence=[evidence(stem, accepted=accepted) for stem in stems],
         source_region=None,
         derivative_region=None,
     )
@@ -133,6 +134,43 @@ def test_group_checks_three_representatives_not_every_timestamp(monkeypatch):
         for row in result.instrument_occurrences
     )
     assert "3 representative comparisons" in result.instrument_occurrences[0].reason
+
+
+def test_group_collects_quorum_for_every_supported_stem(monkeypatch):
+    intervals = [
+        interval(0, 40, 0.99),
+        interval(20, 40, 0.90),
+        interval(40, 40, 0.80),
+    ]
+    outcomes = [
+        ["drums"],
+        ["drums", "guitar"],
+        ["guitar"],
+    ]
+    calls = []
+
+    def compare(*args, **kwargs):
+        stems = outcomes[len(calls)]
+        calls.append((args[2].new_start, stems))
+        return comparison(stems=stems)
+
+    monkeypatch.setattr(grouped_occurrences, "compare_candidate_stems", compare)
+    result = grouped_occurrences.run_grouped_instruments(
+        analysis(intervals),
+        None,
+        None,
+        grouped_settings(stem_group_workers=1),
+        separator=SimpleNamespace(),
+    )
+
+    assert len(calls) == 3
+    assert all(
+        row.suggested_instruments == ["Drums", "Guitar"]
+        for row in result.instrument_occurrences
+    )
+    reason = result.instrument_occurrences[0].reason
+    assert "Drums: 2" in reason
+    assert "Guitar: 2" in reason
 
 
 def test_distinct_groups_run_concurrently(monkeypatch):
