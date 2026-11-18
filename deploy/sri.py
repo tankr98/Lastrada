@@ -81,6 +81,7 @@ def inspect():
         "missing_project_permissions": sorted(set(PERMISSIONS) - set(permissions)),
     }
     print(json.dumps(result, indent=2))
+    print("::notice title=SRI deployment readiness::" + json.dumps(result))
     return result
 
 
