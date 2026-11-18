@@ -219,9 +219,9 @@ def refine_candidate_mixture_details(
         _, reversed_cost = _subsequence_dtw(
             _containment_cost(shifted[:, ::-1], target_features)
         )
-        if mean_cost > 0.58:
-            continue
-        if reversed_cost - mean_cost < 0.02 and mean_cost > 0.34:
+        # Containment alone can be low for the right notes in the wrong order.
+        # Every accepted tonal stem must beat the reversed-source control.
+        if mean_cost > 0.58 or reversed_cost - mean_cost < 0.04:
             continue
 
         matched_target_frames = path[:, 1]
