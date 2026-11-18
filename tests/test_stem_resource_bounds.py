@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from lastrada import pipeline
-from lastrada.alignment import dtw, mixture
+from lastrada.alignment import mixture
 from lastrada.alignment.local import refine_candidate
 from lastrada.alignment.stems import bounded_stem_probe, compare_candidate_stems
 from lastrada.audio.io import Audio
