@@ -191,9 +191,16 @@ def refine_candidate_mixture_details(
         return _rejected(interval, "insufficient harmonic energy for stem comparison")
 
     # A single sustained note or chord is not distinctive enough to identify a
-    # sampled element. The threshold is an abstention rule, not a probability.
-    temporal_variation = float(np.mean(np.var(target_chroma, axis=1)))
-    if temporal_variation < 0.001:
+    # sampled element. Ignore silent search-padding frames so their edges cannot
+    # manufacture apparent variation. This is an abstention rule, not a probability.
+    active = target_chroma.sum(axis=0) > 1e-6
+    active_chroma = target_chroma[:, active]
+    temporal_variation = (
+        float(np.mean(np.var(active_chroma, axis=1)))
+        if active_chroma.shape[1] >= 2
+        else 0.0
+    )
+    if temporal_variation < 0.002:
         return _rejected(
             interval,
             "insufficient changing pitch information in derivative stem",
