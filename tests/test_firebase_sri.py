@@ -1,8 +1,10 @@
 """The experimental deployment must never write to the original stack."""
 
 import importlib.util
+from contextlib import nullcontext
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.error import HTTPError
 
 import pytest
@@ -52,6 +54,31 @@ def test_unmarked_existing_resources_are_not_reused():
         sri.ensure_marked({"name": "occupied", "labels": {}})
 
 
+@pytest.mark.parametrize("api_status,worker_status,origin,valid", [
+    (401, 403, sri.ORIGINS[0], True),
+    (200, 403, sri.ORIGINS[0], False),
+    (401, 200, sri.ORIGINS[0], False),
+    (401, 403, "https://lastrada-alt.web.app", False),
+])
+def test_access_verification_requires_sign_in_private_worker_and_sri_cors(
+    monkeypatch, api_status, worker_status, origin, valid,
+):
+    def respond(req, **kwargs):
+        if req.method == "OPTIONS":
+            return nullcontext(SimpleNamespace(status=200, headers={"access-control-allow-origin": origin}))
+        status = worker_status if req.full_url.startswith("https://worker.test") else api_status
+        if status >= 400:
+            raise HTTPError(req.full_url, status, "authentication required", {}, None)
+        return nullcontext(SimpleNamespace(status=status, headers={}))
+
+    monkeypatch.setattr(sri, "urlopen", respond)
+    if valid:
+        sri.verify_access("https://api.test", "https://worker.test")
+    else:
+        with pytest.raises(ValueError):
+            sri.verify_access("https://api.test", "https://worker.test")
+
+
 def test_new_stack_only_mutates_sri_resources_and_preserves_sign_in(monkeypatch, tmp_path):
     identity = {"branch": sri.BRANCH, "commit": SHA, "profile": "stem-fast", "dirty": False}
     original = {
@@ -72,6 +99,7 @@ def test_new_stack_only_mutates_sri_resources_and_preserves_sign_in(monkeypatch,
     (tmp_path / "web/public").mkdir(parents=True)
     (tmp_path / "firebase.json").write_text(json.dumps({"hosting": {"site": "lastrada-alt"}}))
     monkeypatch.setattr(sri, "source_identity", lambda _: identity)
+    monkeypatch.setattr(sri, "verify_access", lambda api, worker: None)
     snapshots = []
     monkeypatch.setattr(sri, "original_snapshot", lambda: snapshots.append(True) or original)
     commands, mutations, envs = [], [], {}
@@ -92,14 +120,14 @@ def test_new_stack_only_mutates_sri_resources_and_preserves_sign_in(monkeypatch,
         if method != "GET":
             mutations.append((url, method, data))
             return {}
+        if url.startswith("https://lastrada-sri.web.app/config.json"):
+            return json.loads((tmp_path / "web/public/config.json").read_text())
         if allow_missing:
             return None
         if url.endswith("/health"):
             return {"status": "ok", "branch": sri.BRANCH, "commit": SHA}
         if "identitytoolkit" in url:
             return {"authorizedDomains": ["lastrada-alt.web.app", "custom.example"]}
-        if url.startswith("https://lastrada-sri.web.app/config.json"):
-            return json.loads((tmp_path / "web/public/config.json").read_text())
         raise AssertionError(url)
 
     monkeypatch.setattr(sri, "run", run)

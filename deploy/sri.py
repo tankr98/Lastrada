@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import time
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -154,6 +155,27 @@ def service_environment(role, identity, original, worker_url=None):
     return env
 
 
+def verify_access(api_url, worker_url):
+    checks = [
+        (api_url + "/api/analyses/00000000-0000-4000-8000-000000000001", "GET", {}, {401}),
+        (worker_url + "/health", "GET", {}, {401, 403}),
+        (api_url + "/api/analyses", "OPTIONS", {
+            "Origin": ORIGINS[0], "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        }, {200}),
+    ]
+    for url, method, headers, expected in checks:
+        try:
+            with urlopen(Request(url, method=method, headers=headers), timeout=60) as response:
+                status, received = response.status, response.headers
+        except HTTPError as error:
+            status, received = error.code, error.headers
+        if status not in expected:
+            raise ValueError(f"SRI access check failed: {method} {url} returned {status}")
+        if method == "OPTIONS" and received.get("access-control-allow-origin") != ORIGINS[0]:
+            raise ValueError("SRI API did not authorize the new Hosting origin")
+
+
 def deploy(sha, image):
     identity = source_identity(sha)
     if image != f"ghcr.io/tankr98/lastrada:{sha}":
@@ -167,6 +189,7 @@ def deploy(sha, image):
         return request(path, token=token, **kwargs)
 
     # All newly provisioned resources have SRI names and their own identities.
+    print("Preparing the separate SRI service accounts...", flush=True)
     for role in ("api", "worker", "tasks"):
         url = f"https://iam.googleapis.com/v1/projects/{PROJECT}/serviceAccounts/{account(role)}"
         current = api(url, allow_missing=True)
@@ -185,6 +208,7 @@ def deploy(sha, image):
             path.write_text(json.dumps(value))
             return str(path)
 
+        print("Preparing private SRI uploads and the processing queue...", flush=True)
         bucket = api(f"https://storage.googleapis.com/storage/v1/b/{BUCKET}", allow_missing=True)
         ensure_marked(bucket)
         if bucket is None:
@@ -228,6 +252,7 @@ def deploy(sha, image):
         worker_url = None
         for role in ("worker", "api"):
             name = f"{PREFIX}-{role}"
+            print(f"Deploying {name} (the first container start can take a few minutes)...", flush=True)
             service = api(f"https://run.googleapis.com/v2/{parent}/services/{name}", allow_missing=True)
             ensure_marked(service)
             env = service_environment(role, identity, original, worker_url)
@@ -255,6 +280,8 @@ def deploy(sha, image):
         health = request(api_url + "/health")
         if any(health.get(k) != v for k, v in {"status": "ok", "branch": BRANCH, "commit": sha}.items()):
             raise ValueError("SRI API health does not match the requested release")
+        verify_access(api_url, worker_url)
+        print("Publishing the separate SRI website and enabling its Google sign-in...", flush=True)
         site_url = f"https://firebasehosting.googleapis.com/v1beta1/projects/{PROJECT}/sites"
         if api(site_url + "/" + SITE, allow_missing=True) is None:
             api(site_url + "?siteId=" + SITE, method="POST", data={})
@@ -274,9 +301,13 @@ def deploy(sha, image):
         hosting["hosting"]["public"] = str(ROOT / "web/public")
         run(*FIREBASE, "deploy", "--only", "hosting", "--project", PROJECT,
             "--config", json_file("firebase.json", hosting), "--non-interactive")
-        deployed = request(ORIGINS[0] + "/config.json?release=" + sha)
-        if deployed != config:
-            raise ValueError("SRI Hosting configuration differs from the verified build")
+        for attempt in range(6):
+            deployed = request(ORIGINS[0] + "/config.json?release=" + sha, allow_missing=True)
+            if deployed == config:
+                break
+            if attempt == 5:
+                raise ValueError("SRI Hosting configuration differs from the verified build")
+            time.sleep(5)
 
     if original_snapshot() != original:
         raise ValueError("Original stack changed during deployment; inspect before continuing")

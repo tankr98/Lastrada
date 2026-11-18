@@ -30,7 +30,7 @@ concurrency:
 
 jobs:
   deploy:
-    if: github.event_name == 'push' || inputs.operation == 'hosting'
+    if: github.ref != 'refs/heads/local/stem-fast-v-SRI' && (github.event_name == 'push' || inputs.operation == 'hosting')
     runs-on: ubuntu-latest
     steps:
       - name: Check out validated frontend
@@ -184,7 +184,7 @@ jobs:
           } >> "${GITHUB_STEP_SUMMARY}"
 
   existing-stack:
-    if: github.event_name == 'workflow_dispatch' && inputs.operation != 'hosting'
+    if: github.ref == 'refs/heads/local/stem-fast' && github.event_name == 'workflow_dispatch' && inputs.operation != 'hosting'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
