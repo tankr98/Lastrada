@@ -1,6 +1,5 @@
 """Recording-sample workflow: detected times and editable description proposals."""
 
-from lastrada.alignment.intervals import merge_ranges
 from lastrada.reporting.suggestions import placement_proposal
 from lastrada.schemas.models import PathResult
 
@@ -144,16 +143,8 @@ def description_proposal(analysis, intervals, model_name=None, rights="master"):
     partial = has_partial_matches(intervals)
     if partial:
         values["repetition"] = "Repetition not fully assessed; only located portions are shown"
-    ranges = merge_ranges([(i.new_start, i.new_end) for i in intervals], analysis.durations["new"])
-    role = (
-        "Musical layer in the located passages"
-        if partial
-        else "Recurring musical texture"
-        if len(ranges) > 1
-        else "A brief musical accent"
-        if ranges and ranges[0][1] - ranges[0][0] <= 8
-        else "An extended musical layer"
-    )
+    from lastrada.reporting.prose import role_preset
+    role = role_preset(labels)
     return {
         "description": {
             "element": element,

@@ -103,9 +103,9 @@ def test_confirming_description_preserves_automated_times_and_exports_without_re
     assert saved.review.corrected["publishing"]["locate"]["detection_status"] == "not_requested"
     assert missing_document_inputs(saved) == []
     text = document_text(saved)
-    assert "automatically estimated" in text and "Estimated total use" in text
-    assert "≈ " in text and "endings are uncertain" in text
-    assert "Reused lyrics have not been assessed" in text
+    assert "Estimated total use" in text
+    assert "≈ " in text and "endings are uncertain" not in text
+    assert "Reused lyrics have not been assessed" not in text
     assert "No separate replayed" not in text and "Replayed melody" not in text
     assert not any(f["feature"] == "lyrics" for f in path["describe"]["elements"])
     assert analysis.model_dump() == before
@@ -123,14 +123,16 @@ def test_description_only_review_cannot_forge_or_confirm_timestamps():
         apply_review(analysis, payload)
 
 
-def test_throughout_description_keeps_ending_uncertainty_in_narrative_and_export():
+def test_throughout_description_keeps_ending_metadata_without_review_diagnostics_in_prose():
     analysis = analysis_with_match()
     payload = sample_payload(analysis)
     payload.paths["master"].placement = Placement.THROUGHOUT
     payload.paths["master"].sections = ["whole track"]
     saved = apply_review(analysis, payload)
-    assert "endings are uncertain" in saved.review.corrected["nature_of_use"]["text"]
-    assert "Some endings are uncertain" in document_text(saved)
+    assert "endings are uncertain" not in saved.review.corrected["nature_of_use"]["text"]
+    assert "Some endings are uncertain" not in document_text(saved)
+    assert "≈ " in document_text(saved)
+    assert saved.master.locate.sample_occurrences[0].end_review
 
 
 def test_description_uses_current_instrument_evidence_and_separates_source_presence():

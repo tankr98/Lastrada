@@ -159,7 +159,8 @@ def test_bounded_match_survives_save_review_and_export_without_accepting_coarse_
     assert missing_document_inputs(reviewed) == []
     text = document_text(reviewed)
     assert "Located portions: 4.00s" in text
-    assert "reuse may extend beyond them or appear elsewhere" in text
+    assert "reuse may extend beyond them or appear elsewhere" not in text
+    assert "checked portion" in reviewed.review.corrected["master"]["locate"]["sample_occurrences"][0]["source"]
     assert "Estimated total use" not in text
     assert "2:28.00" in text and "4:56.00" in text
     assert "300.00s" not in text

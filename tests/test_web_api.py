@@ -386,7 +386,8 @@ def test_sample_description_flow_api_confirms_description_without_timestamp_or_r
             assert restored.review.corrected["master"]["locate"]["timing_source"] == "automated"
             assert restored.master == analysis.master
         else:
-            assert "automatically estimated" in response.text
+            assert "Estimated total use" in response.text
+            assert "unconfirmed" not in response.text
             assert "No separate replayed" not in response.text
 
 
@@ -509,7 +510,7 @@ def test_draft_preview_is_private_read_only_and_never_approves(service, table_dr
     response = client.post(url + "/draft", headers=headers, json=body)
     assert response.status_code == 200
     draft = response.json()
-    assert "Draft — review required" in draft["document"]
+    assert "NATURE OF USE\nDraft\n" in draft["document"]
     assert draft["paths"]["master"]["element"]
     assert not draft["paths"]["master"]["details_confirmed"]
     if table_draft:

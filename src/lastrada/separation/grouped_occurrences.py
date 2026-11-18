@@ -28,9 +28,10 @@ from lastrada.separation.occurrences import (
     EVIDENCE_VERSION,
     occurrence_id,
     occurrence_rows,
+    matched_instruments,
     stabilize_source_descriptions,
 )
-from lastrada.separation.presence import LABELS, context_probe, describe_region
+from lastrada.separation.presence import context_probe, describe_region
 
 
 MIN_PROBE_SECONDS = 2.0
@@ -161,16 +162,7 @@ def _plans(result, rows, settings) -> list[GroupPlan]:
 
 
 def _accepted_labels(row: InstrumentOccurrence) -> set[str]:
-    if row.context_only or row.status != "checked":
-        return set()
-    return {
-        LABELS[item.source_stem]
-        for item in row.evidence
-        if item.dtw_result == "accepted"
-        and item.source_stem == item.new_song_stem
-        and item.source_stem in LABELS
-        and item.scope == "sample"
-    }
+    return set(matched_instruments(row))
 
 
 def _check_representative(
@@ -309,10 +301,13 @@ def _apply_group_result(
             row.context_only = False
 
         if final:
-            row.status = "failed" if verdict == "failed" else "checked"
-            row.suggested_instruments = (
-                list(supported_labels) if verdict == "supported" else []
-            )
+            if not representative:
+                row.status = "failed" if verdict == "failed" else "checked"
+                row.suggested_instruments = list(supported_labels) if verdict == "supported" else []
+            else:
+                # Preserve both a representative's positive findings and its
+                # negative/failed result. A group vote must not replace either.
+                row.suggested_instruments = sorted(_accepted_labels(row))
             row.reason = reason
         elif representative:
             row.reason = reason
@@ -345,7 +340,7 @@ def _process_group(
     )
 
     for row in plan.representatives:
-        if row.status == "checked":
+        if row.status == "checked" and row.probe is not None:
             processed_rows.append(row)
         else:
             if not reserve_check():
@@ -425,7 +420,7 @@ def run_grouped_instruments(
     began = monotonic()
     deadline = began + max(0, budget_seconds)
     rows = updated.instrument_occurrences
-    grouped_method = "grouped_representatives" in updated.methods.get(
+    grouped_method = "grouped_representatives_v3" in updated.methods.get(
         "instruments",
         "",
     )
@@ -462,7 +457,7 @@ def run_grouped_instruments(
         with persist_lock:
             stabilize_source_descriptions(rows, source_descriptions)
             updated.methods["instruments"] = (
-                f"demucs_{settings.stem_model_name}_grouped_representatives_v2; "
+                f"demucs_{settings.stem_model_name}_grouped_representatives_v3; "
                 f"workers={settings.stem_group_workers}; "
                 f"max_representatives={settings.stem_group_max_representatives}; "
                 "all_stem_quorums"

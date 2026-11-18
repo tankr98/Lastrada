@@ -129,10 +129,8 @@ def test_group_checks_three_representatives_not_every_timestamp(monkeypatch):
     assert all(call[1]["include_full_mix"] is False for call in calls)
     assert all(call[1]["parallel_dtw"] is True for call in calls)
     assert all(row.status == "checked" for row in result.instrument_occurrences)
-    assert all(
-        row.suggested_instruments == ["Drums"]
-        for row in result.instrument_occurrences
-    )
+    assert result.instrument_occurrences[0].suggested_instruments == []
+    assert all(row.suggested_instruments == ["Drums"] for row in result.instrument_occurrences[1:])
     assert "3 representative comparisons" in result.instrument_occurrences[0].reason
 
 
@@ -164,10 +162,9 @@ def test_group_collects_quorum_for_every_supported_stem(monkeypatch):
     )
 
     assert len(calls) == 3
-    assert all(
-        row.suggested_instruments == ["Drums", "Guitar"]
-        for row in result.instrument_occurrences
-    )
+    assert [row.suggested_instruments for row in result.instrument_occurrences] == [
+        ["Drums"], ["Drums", "Guitar"], ["Guitar"],
+    ]
     reason = result.instrument_occurrences[0].reason
     assert "Drums: 2" in reason
     assert "Guitar: 2" in reason
@@ -202,6 +199,31 @@ def test_distinct_groups_run_concurrently(monkeypatch):
 
     assert len(threads) == 2
     assert all(row.status == "checked" for row in result.instrument_occurrences)
+
+
+def test_local_tonal_and_vocal_matches_survive_a_drums_only_group_consensus(monkeypatch):
+    from lastrada.reporting.sample_flow import description_proposal
+    from lastrada.schemas.models import Analysis
+
+    outcomes = [["bass", "piano", "vocals"], ["drums"], ["drums"]]
+    calls = []
+
+    def compare(*args, **kwargs):
+        stems = outcomes[len(calls)]
+        calls.append(args[2].new_start)
+        return comparison(stems=stems)
+
+    monkeypatch.setattr(grouped_occurrences, "compare_candidate_stems", compare)
+    result = grouped_occurrences.run_grouped_instruments(
+        analysis([interval(n * 20, 40, .99 - n * .01) for n in range(5)]),
+        None, None, grouped_settings(stem_group_workers=1), separator=SimpleNamespace(),
+    )
+    reloaded = Analysis.model_validate_json(result.model_dump_json())
+    assert reloaded.instrument_occurrences[0].suggested_instruments == ["Bass", "Piano", "Vocals"]
+    assert reloaded.instrument_occurrences[2].suggested_instruments == ["Drums"]
+    proposal = description_proposal(reloaded, reloaded.master.locate.sample_occurrences)
+    assert set(proposal["description"]["element"].split(", ")) == {"Bass", "Piano", "Vocals", "Drums"}
+    assert len(calls) == 3
 
 
 def test_process_pool_accepts_more_than_two_bounded_workers():

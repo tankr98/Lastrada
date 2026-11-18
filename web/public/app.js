@@ -229,7 +229,7 @@ function renderDraft() {
       <details id="previousWording" ${previousNarrative ? "" : "hidden"}><summary>Earlier draft wording</summary><pre class="document">${esc(previousNarrative)}</pre></details>
       ${field("Your name / reviewer", "reviewer", reviewer)}<label>Anything still to check? (optional)<textarea data-global="notes">${esc(notes)}</textarea></label>
       <div class="actions">${button("Save draft", "save")}${canApproveDraft() ? button("Confirm Nature of Use", "approve", true) : ""}</div>
-      <p id="reviewStatus">${approved ? "Reviewed and ready to download." : "Draft — not yet confirmed."}</p>
+      <p id="reviewStatus">${approved ? "Reviewed and ready to download." : "Draft ready for your review."}</p>
       <div class="actions">${button(approved ? "Download HTML" : "Download draft HTML", "html")}${button(approved ? "Download text" : "Download draft text", "text")}</div>
       <details><summary>Supporting analysis</summary>${button("Download analysis JSON", "json")}</details>
     </section><div class="stepNav">${button("View detailed analysis", "back")}${button("New Sample", "new")}</div><div hidden inert aria-hidden="true"><section id="instruments">${renderInstruments()}</section></div>`);
@@ -270,7 +270,7 @@ function updateDraftStatus() {
   if (step !== 5) return;
   $("#draftStatus").textContent = draftError || (draftBusy ? "Updating your draft…" : "Draft matches the current details below.");
   $("#draftDocument").setAttribute("aria-busy", String(draftBusy));
-  $("#reviewStatus").textContent = approved ? "Reviewed and ready to download." : "Draft — not yet confirmed.";
+  $("#reviewStatus").textContent = approved ? "Reviewed and ready to download." : "Draft ready for your review.";
   for (const action of ["html", "text"])
     $(`[data-action="${action}"]`).disabled = draftBusy || !!draftError || !draftDocument;
   const approve = $('[data-action="approve"]');

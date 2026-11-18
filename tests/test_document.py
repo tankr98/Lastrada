@@ -27,7 +27,8 @@ def test_unconfirmed_overlap_never_becomes_documented_use():
     result = example()
     text = document_text(result)
     assert "80%" not in text and "8.00s" not in text
-    assert "not been confirmed" in text
+    assert "No passage is selected" in text
+    assert "not been confirmed" not in text
     assert any("sampled sound" in item for item in missing_document_inputs(result))
     assert "spectral" not in creator_narrative(result)
 
@@ -83,8 +84,8 @@ def test_throughout_keeps_detailed_times_in_both_export_appendices():
     result.nature_of_use.text = creator_narrative(result)
     for text in (result.nature_of_use.text, document_text(result), document_html(result)):
         assert "throughout the track" in text
-        assert "A short loop repeated in the track" in text
-    assert "0:02.00" not in result.nature_of_use.text
+        assert "short repeating loop" in text
+    assert "0:02.00" in result.nature_of_use.text
     for text in (document_text(result), document_html(result)):
         appendix = text.split("Exact timestamps and evidence")[1]
         assert "0:02.00–0:03.00" in appendix

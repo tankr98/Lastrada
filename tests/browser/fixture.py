@@ -49,6 +49,15 @@ def initial():
         for row in analysis.instrument_occurrences:
             row.status = "pending" if sample_scenario.startswith(("automatic", "early_")) or sample_scenario == "candidate_table" else "checked"
             row.suggested_instruments = ["Guitar"] if sample_scenario == "prefilled" else []
+            if sample_scenario == "prefilled":
+                from lastrada.schemas.models import StemEvidence
+                # Reproduce an older group summary masking valid non-drum matches.
+                row.suggested_instruments = ["Drums"]
+                row.evidence = [StemEvidence(
+                    candidate_number=row.candidate_number, source_stem=stem,
+                    new_song_stem=stem, dtw_result="accepted", scope="sample",
+                    interpretation="Generated test comparison", reason="Generated test comparison",
+                ) for stem in ("drums", "bass", "guitar", "piano", "vocals")]
         analysis.methods.update(sampleid="local_cpu_chunk_embeddings", stems="demucs_htdemucs_6s_candidate_regions")
         if sample_scenario == "matcher_unavailable":
             analysis.master.locate.sample_occurrences = []

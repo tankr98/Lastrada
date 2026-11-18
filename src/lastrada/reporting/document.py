@@ -3,7 +3,6 @@
 from html import escape
 from lastrada.schemas.models import Analysis, PathResult
 from lastrada.reporting.sample_flow import automatic_path
-from lastrada.reporting.placement import PLACEMENT_TEXT
 
 RIGHTS_NAMES = {
     "master": "Recording sample (master)",
@@ -52,7 +51,7 @@ def timestamp(value):
 
 def document_text(analysis: Analysis, model_name=None):
     data = analysis.review.corrected or analysis.model_dump(mode="json")
-    state = "Reviewed" if analysis.review.status == "approved" else "Draft — review required"
+    state = "Reviewed" if analysis.review.status == "approved" else "Draft"
     lines = [
         "NATURE OF USE",
         state,
@@ -74,9 +73,6 @@ def document_text(analysis: Analysis, model_name=None):
     lines += ["", "Exact timestamps and evidence"]
     from lastrada.reporting.table_draft import evidence_lines
     lines.extend(evidence_lines(analysis, document_paths(analysis), model_name))
-    missing = missing_document_inputs(analysis)
-    if missing:
-        lines += ["Still needed to complete this document"] + [f"• {item}" for item in missing]
     return "\n".join(lines).rstrip()
 
 
@@ -90,60 +86,9 @@ def document_html(analysis, model_name=None):
 
 
 def creator_narrative(analysis):
-    parts = []
-    for rights in analysis.input.analysis_scope:
-        path = getattr(analysis, rights)
-        if analysis.review.workflow == "sample" and path.locate.detection_status == "not_requested":
-            continue
-        name = "the original recording" if rights == "master" else "the original composition"
-        if path.locate.detection_status == "not_detected":
-            parts.append(
-                "No separate replayed melody or re-sung lyrics were identified in this listening check."
-                if rights == "publishing"
-                else f"No reuse of {name} was identified in this listening check."
-            )
-            continue
-        automatic = automatic_path(path)
-        if path.locate.detection_status != "verified" and not automatic:
-            parts.append(
-                f"The use of {name} in the new track has not yet been checked. "
-                "The musical part, its appearances and the way it is used still need to be described."
-            )
-            continue
-        element = next(
-            (
-                str(f.value)
-                for f in path.describe.elements
-                if f.feature == "musical_element" and f.value
-            ),
-            "a musical part not yet identified",
-        )
-        parts.append(f"The new track uses {element} from {name}.")
-        if path.describe.reuse_type:
-            parts.append(f"How it is used: {path.describe.reuse_type}.")
-        if path.classification.placement:
-            parts.append("It can be heard " + PLACEMENT_TEXT[path.classification.placement] + ".")
-        if path.classification.placement != "throughout" and path.locate.sample_occurrences:
-            ranges = ", ".join(
-                f"{timestamp(i.new_start)}–{timestamp(i.new_end)}"
-                for i in path.locate.sample_occurrences
-            )
-            parts.append(f"{'Estimated appearances' if automatic else 'It can be heard'} at {ranges} in the new track.")
-        if path.describe.sections and path.describe.sections != ["whole track"]:
-            parts.append(
-                "It appears in the matched passages."
-                if path.describe.sections == ["matched passages"]
-                else "It appears in the " + ", ".join(path.describe.sections) + " sections."
-            )
-        if automatic and any(i.end_review for i in path.locate.sample_occurrences):
-            parts.append("Some sample endings are uncertain and may extend beyond the estimated times.")
-        if path.describe.repetition:
-            parts.append(f"Repetition: {path.describe.repetition}.")
-        if path.describe.role_in_new_song:
-            parts.append(f"Its role in the track: {path.describe.role_in_new_song}.")
-        lyrics = next((str(f.value) for f in path.describe.elements
-                       if f.feature == "lyrics" and f.value), None)
-        if lyrics:
-            parts.append(f"Reused lyrics: {lyrics}")
-        parts.extend(path.describe.limitations)
-    return " ".join(parts)
+    # Use the same musical writer for legacy saved reviews and the draft-first UI.
+    from lastrada.reporting.table_draft import narrative
+    return narrative(analysis, {
+        rights: getattr(analysis, rights).model_dump(mode="json")
+        for rights in analysis.input.analysis_scope
+    })

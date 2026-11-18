@@ -3,7 +3,7 @@ import re
 
 from lastrada.schemas.models import Analysis, Intake, Work, Interval, InstrumentPresence
 from lastrada.web.domain import DraftPayload, draft_preview
-from lastrada.reporting.table_draft import ROLE_UNKNOWN, METHOD_UNCONFIRMED
+from lastrada.reporting.table_draft import METHOD_UNCONFIRMED
 from lastrada.separation.occurrences import occurrence_rows
 from lastrada.web.profile import PROFILE
 
@@ -34,12 +34,13 @@ def test_unconfirmed_table_generates_a_factual_draft_without_any_review_or_mutat
     result = draft_preview(analysis, request(analysis), PROFILE["stem_model"])
     assert analysis.model_dump() == before
     assert result["paths"]["master"]["times_confirmed"] is False
-    assert "recording reuse remains unconfirmed" in result["narrative"]
+    assert "The proposed use" in result["narrative"]
+    assert "unconfirmed" not in result["document"]
     assert "0:15.00–0:20.00 in the original recording" in result["narrative"]
     assert "1:00.00–1:05.00 in the new track" in result["narrative"]
     assert "guitar" in result["narrative"]
-    assert result["paths"]["master"]["role"] == ROLE_UNKNOWN
-    assert "Draft — review required" in result["document"]
+    assert result["paths"]["master"]["role"] == "Pitched accompaniment"
+    assert "NATURE OF USE\nDraft\n" in result["document"]
     assert analysis.review.corrected is None
 
 
@@ -51,7 +52,7 @@ def test_repetition_keeps_one_paired_example_in_story_and_every_row_in_appendix(
     original = deepcopy(analysis.model_dump())
     groups = group_loop_families(intervals, 200)
     result = draft_preview(analysis, request(analysis), PROFILE["stem_model"])
-    assert f"{groups[0].occurrence_count} possible appearances" in result["document"]
+    assert f"{groups[0].occurrence_count} appearances" in result["document"]
     assert result["narrative"].count("in the original recording") == 1
     assert "recurring" in result["narrative"]
     from lastrada.reporting.document import timestamp
@@ -71,28 +72,27 @@ def test_presence_context_and_bounded_probe_are_not_attributed_to_whole_sample()
     analysis = Analysis.model_validate(analysis.model_dump())
     result = draft_preview(analysis, request(analysis), PROFILE["stem_model"])
     text = result["document"]
-    assert "surrounding audio in the original recording contains estimated vocals at 0:14.00–0:21.00" in text
-    assert "check supports guitar" not in text
-    assert "alone do not establish" in text
+    assert "Surrounding texture in the original recording: estimated vocals at 0:14.00–0:21.00" in text
+    assert "Musical material: guitar" not in text
     assert "guitar" not in result["narrative"].lower()
     row = analysis.instrument_occurrences[0]
     row.context_only = False
     row.probe = row.interval.model_copy(update={"new_start": 61, "new_end": 64, "original_start": 16, "original_end": 19})
     result = draft_preview(analysis, request(analysis), PROFILE["stem_model"])
     text = result["document"]
-    assert "check supports guitar" in text
+    assert "Musical material: guitar" in text
     assert "0:16.00–0:19.00 in the original and 1:01.00–1:04.00 in the new track" in text
-    assert "unchecked remainder" in text
-    assert "only to the checked audio" in result["narrative"]
+    assert "Instrument detail covers" in text
+    assert "estimates apply only" not in result["narrative"]
 
 
 def test_missing_positions_and_instruments_stay_unknown_and_examples_cannot_supply_facts():
     analysis = table_case([Interval(new_start=7, new_end=9, source="pfnmf")])
     analysis.instrument_occurrences = []
     text = draft_preview(analysis, request(analysis), PROFILE["stem_model"])["narrative"]
-    assert "position in the original recording is unknown" in text
+    assert "in the original recording" not in text
     assert "0:07.00–0:09.00 in the new track" in text
-    assert "unresolved instrumentation" in text
+    assert "a musical passage" in text
     for invented in ["synthesizer", "pitched", "sped up", "keep runnin", "beneath the new artist"]:
         assert invented not in text
 
@@ -103,7 +103,7 @@ def test_method_default_requires_both_recording_and_timing_confirmation():
     payload.paths["master"].times_confirmed = True
     still_unconfirmed = draft_preview(analysis, payload, PROFILE["stem_model"])
     assert still_unconfirmed["paths"]["master"]["method"] == METHOD_UNCONFIRMED
-    assert "recording reuse remains unconfirmed" in still_unconfirmed["narrative"]
+    assert "The proposed use" in still_unconfirmed["narrative"]
     payload.paths["master"].status = "confirmed"
     reviewed = draft_preview(analysis, payload, PROFILE["stem_model"])
     assert reviewed["paths"]["master"]["method"] == "Sampled the original recording"
@@ -143,13 +143,13 @@ def test_role_interpretation_is_tentative_and_uses_checked_instruments_only():
         row.suggested_instruments = ["Bass", "Drums"]
     result = draft_preview(analysis, request(analysis), PROFILE["stem_model"])
     assert_short_story(result["narrative"])
-    assert "If the suggested match is correct" in result["narrative"]
-    assert "could provide a rhythmic foundation" in result["narrative"]
+    assert "low-register foundation" in result["narrative"]
+    assert "rhythmic pulse" in result["narrative"]
     for row in analysis.instrument_occurrences:
         row.context_only = True
     context = draft_preview(analysis, request(analysis), PROFILE["stem_model"])
-    assert "rhythmic foundation" not in context["narrative"]
-    assert "instrument estimates apply only to the checked audio" in context["narrative"]
+    assert "bass foundation" not in context["narrative"]
+    assert "drum pulse" not in context["narrative"]
 
 
 def test_two_rights_paths_still_fit_two_paragraphs_and_keep_all_evidence():

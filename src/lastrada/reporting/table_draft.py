@@ -14,7 +14,12 @@ from lastrada.schemas.models import PathResult
 from lastrada.separation.occurrences import occurrence_rows
 
 ROLE_UNKNOWN = "Musical role not established by the analysis"
-METHOD_UNCONFIRMED = "Possible recording sample — not confirmed by the analysis"
+METHOD_UNCONFIRMED = "Recording sample"
+METHOD_DEFAULTS = {
+    METHOD_UNCONFIRMED, "Possible recording sample — not confirmed by the analysis",
+    "Musical reuse not confirmed by the analysis", "Replayed musical material",
+    "Sampled the original recording", "Replayed or re-sang the original music",
+}
 
 
 def key(interval):
@@ -23,10 +28,9 @@ def key(interval):
 
 def proposal(analysis, intervals, model_name=None, rights="master", confirmed=False):
     result = description_proposal(analysis, intervals, model_name, rights)
-    result["description"]["role"] = ROLE_UNKNOWN
-    result["notes"]["role"] = "Timing and instrument labels do not establish a hook, melody or background role."
+    result["notes"]["role"] = "Drafted from the named musical parts; adjust to describe their role in your arrangement."
     if not confirmed:
-        result["description"]["method"] = METHOD_UNCONFIRMED if rights == "master" else "Musical reuse not confirmed by the analysis"
+        result["description"]["method"] = METHOD_UNCONFIRMED if rights == "master" else "Replayed musical material"
     return result
 
 
@@ -38,7 +42,7 @@ def join_words(values):
 
 
 def sounds(values):
-    return join_words("unidentified accompaniment" if v.lower() == "other" else v.lower()
+    return join_words("instrumental texture" if v.lower() in {"other", "other sounds (unidentified)"} else v.lower()
                       for v in values if v.lower() not in {"full_mix", "full mix"})
 
 
@@ -48,15 +52,14 @@ def span(start, end):
 
 def sound_note(row):
     if not row or row.status != "checked":
-        return "The instrument or vocal content has not been established for this passage."
+        return ""
     labels = sounds(row.suggested_instruments) if not row.context_only else ""
     if labels:
-        note = f"The instrument check supports {labels} in this match."
+        note = f"Musical material: {labels}."
         if row.probe and key(row.probe) != key(row.interval):
             p = row.probe
-            note += (f" This check covers {span(p.original_start, p.original_end)} in the original"
-                     f" and {span(p.new_start, p.new_end)} in the new track; it does not identify"
-                     " the instruments in the unchecked remainder.")
+            note += (f" Instrument detail covers {span(p.original_start, p.original_end)} in the original"
+                     f" and {span(p.new_start, p.new_end)} in the new track.")
         return note
     notes = []
     for name, estimates in (("original recording", row.source_sounds), ("new track", row.new_sounds)):
@@ -68,11 +71,9 @@ def sound_note(row):
         for (start, end, scope), labels in groups.items():
             label = sounds(labels)
             if label:
-                where = "surrounding audio" if scope == "context" else "checked audio"
-                notes.append(f"The {where} in the {name} contains estimated {label} at {span(start, end)}.")
-    if notes:
-        notes.append("These sound estimates alone do not establish which instruments were sampled.")
-    return " ".join(notes) or "The instrument or vocal content is unresolved."
+                where = "Surrounding texture" if scope == "context" else "Texture"
+                notes.append(f"{where} in the {name}: estimated {label} at {span(start, end)}.")
+    return " ".join(notes)
 
 
 def fragment(value, limit=24):
@@ -88,46 +89,23 @@ def feature(path, name):
 
 
 def role_sentence(path, intervals, rows, repeated):
-    """A musical interpretation, explicitly tentative and tied to measured evidence."""
-    supplied = path.describe.role_in_new_song
-    if supplied and supplied != ROLE_UNKNOWN:
-        return f"The intended musical role is described as “{fragment(supplied)}”."
-    labels = {label.lower() for i in intervals for row in [rows.get(key(i))]
-              if row and row.status == "checked" and not row.context_only
-              for label in row.suggested_instruments}
-    placement = path.classification.placement
-    if placement in {"intro_outro_without_chorus", "intro_outro_with_chorus"}:
-        thought = "the opening and closing placement could give the track a shared musical motif"
-    elif placement == "intro_only":
-        thought = ("the vocal material at the opening could act as an introductory motif, giving the track a recognizable point of entry"
-                   if "vocals" in labels else "its opening placement could introduce a musical motif that sets the track’s character")
-    elif placement == "outro_only":
-        thought = ("the closing vocal material could give the ending a recognizable vocal signature"
-                   if "vocals" in labels else "its closing placement could give the ending a recognizable musical signature")
-    elif repeated and labels & {"bass", "drums"}:
-        thought = "the repeated bass and percussion in the checked audio could provide a rhythmic foundation"
-        if "bass" not in labels:
-            thought = thought.replace("bass and percussion", "percussion")
-        elif "drums" not in labels:
-            thought = thought.replace("bass and percussion", "bass")
-    elif repeated and "vocals" in labels:
-        thought = "the recurring vocal material in the checked audio could act as a refrain linking the passages"
-    elif repeated:
-        thought = "the recurring material could provide a musical thread linking the passages"
-    elif has_partial_matches(intervals):
-        thought = "the checked portion could contribute a musical layer, although its wider role remains unclear"
-    elif intervals and max(i.new_end - i.new_start for i in intervals) <= 8:
-        thought = "its brief duration suggests it could act as a musical accent"
-    else:
-        thought = "its sustained presence could provide a continuing musical layer"
-    if path.locate.detection_status != "verified" and not automatic_path(path):
-        return "If the suggested match is correct, " + thought + "."
-    return thought[0].upper() + thought[1:] + "."
+    from lastrada.reporting.prose import arrangement, named_parts, role_preset, structure
+
+    element = feature(path, "musical_element")
+    parts = named_parts(element)
+    supplied = path.describe.role_in_new_song or ""
+    defaults = {ROLE_UNKNOWN, role_preset(element.split(",")), "Recurring musical texture",
+                "A brief musical accent", "An extended musical layer", "Musical layer in the located passages"}
+    if supplied and supplied not in defaults:
+        return f"Its role in the arrangement is “{fragment(supplied)}”."
+    return arrangement(parts) or structure(path.classification.placement, repeated,
+                                           max((i.new_end - i.new_start for i in intervals), default=0) <= 8)
 
 
 def narrative(analysis, paths, model_name=None):
-    """At most two short paragraphs; detailed evidence belongs in the appendix."""
-    rows = {key(row.interval): row for row in occurrence_rows(analysis, model_name)}
+    """Two short musical paragraphs; review diagnostics stay in the analysis."""
+    from lastrada.reporting.prose import named_parts, structure
+
     stories = []
     for rights, value in paths.items():
         path = PathResult.model_validate(value)
@@ -138,71 +116,63 @@ def narrative(analysis, paths, model_name=None):
                              else "The saved review records no separate replayed melody or re-sung lyrics."], []))
             continue
         intervals = path.locate.sample_occurrences
-        established = path.locate.detection_status == "verified" or automatic_path(path)
         if not intervals:
-            stories.append((["The analysis has not located a passage to describe.",
-                             "Source and new-track timestamps, instruments and musical role remain unresolved."], []))
+            stories.append((["No passage is selected for this Nature of Use."], []))
             continue
-        description = path.describe
+        established = path.locate.detection_status == "verified" or automatic_path(path)
         element = feature(path, "musical_element")
-        common = {"Vocals": "a vocal passage", "Bass": "a bass part", "Guitar": "a guitar part",
-                  "Piano": "a piano part", "Drums": "a drum part",
-                  "Sampled passage — instrument not identified": "a passage with unresolved instrumentation"}
-        material = common.get(element, f"material described as “{fragment(element)}”") if element else "a musical passage"
-        labels = [part.strip() for part in element.split(",")]
-        if len(labels) > 1 and all(label in {"Vocals", "Bass", "Guitar", "Piano", "Drums", "Other"} for label in labels):
-            material = "a passage containing " + sounds(labels)
-        source_note = ""
-        if element.startswith("Sampled passage; source sounds include "):
+        parts = named_parts(element)
+        common = {"vocals": "a vocal phrase", "bass": "a bass part", "guitar": "a guitar part",
+                  "piano": "a piano part", "drums": "a drum part", "other": "an instrumental texture"}
+        if len(parts) == 1:
+            material = common[parts[0]]
+        elif len(parts) > 2:
+            material = "a layered vocal and instrumental passage" if "vocals" in parts else "a layered instrumental passage"
+        elif parts:
+            material = "a passage combining " + sounds(parts)
+        elif not element or element.startswith("Sampled passage"):
             material = "a musical passage"
-            source_note = ", with " + fragment(element.split("include ", 1)[1], 14) + " estimated in the source"
+        else:
+            material = f"the musical material “{fragment(element)}”"
         new = " ".join(analysis.input.new_work.title.split())
         original = " ".join(analysis.input.original_work.title.split())
-        opening = f"“{new}” {'draws on' if established else 'may draw on'} {material} from “{original}”" + source_note
-        if not established:
-            opening += ", although recording reuse remains unconfirmed" if rights == "master" else ", although musical reuse remains unconfirmed"
-        method = description.reuse_type
-        if method and method not in {METHOD_UNCONFIRMED, "Sampled the original recording"}:
-            opening += f", with the use described as “{fragment(method, 14)}”"
-        opening += "."
-        families = group_loop_families(intervals, analysis.durations["new"])
-        first = min(intervals, key=lambda i: (i.new_start, i.new_end))
-        source = (f"the passage at {span(first.original_start, first.original_end)} in the original recording"
-                  if first.original_start is not None else "a passage whose position in the original recording is unknown")
-        example = f"For example, {source} {'appears' if established else 'may appear'} at {span(first.new_start, first.new_end)} in the new track."
         placement = PLACEMENT_TEXT.get(path.classification.placement, "in the located passages")
-        repetition = description.repetition or ""
-        if repetition in {"Recurs in multiple passages", "Repeated throughout the track", "Repeated in the selected sections"}:
-            usage = f"The material recurs {placement}"
-        elif repetition == "A short loop repeated in the track":
-            usage = f"The recurring pattern {placement} suggests a loop"
+        location = " " + placement if path.classification.placement != "one_time" else ""
+        method = path.describe.reuse_type or ""
+        replayed = rights == "publishing" or "replay" in method.lower() or "re-sang" in method.lower()
+        verb = "reworks" if replayed else "draws on"
+        opening = (f"“{new}” {verb} {material} from “{original}”{location}." if established else
+                   f"The proposed use in “{new}” centers on {material} from “{original}”{location}.")
+        first = min(intervals, key=lambda i: (i.new_start, i.new_end))
+        if first.original_start is not None:
+            example = (f"The excerpt at {span(first.original_start, first.original_end)} in the original recording "
+                       f"{'appears at' if established else 'is paired with'} {span(first.new_start, first.new_end)} in the new track.")
         else:
-            usage = f"The passage is placed {placement}"
-            if repetition not in {"Used once", "One continuous appearance", ""} and not repetition.startswith("Repetition not"):
-                usage += f", with repetition described as “{fragment(repetition, 14)}”"
-        usage += "."
-        interpretation = [role_sentence(path, intervals, rows if rights == "master" else {},
-                                        any(f.occurrence_count > 1 for f in families))]
+            example = f"The selected passage runs from {span(first.new_start, first.new_end)} in the new track."
+        facts = [opening, example]
+        if method and method not in METHOD_DEFAULTS:
+            facts.append(f"The treatment of the passage is “{fragment(method, 18)}”.")
+        families = group_loop_families(intervals, analysis.durations["new"])
+        repetition = path.describe.repetition or ""
+        repeated = any(f.occurrence_count > 1 for f in families) and repetition not in {"Used once", "One continuous appearance"}
+        interpretation = [role_sentence(path, intervals, {}, repeated)]
+        structural = structure(path.classification.placement, repeated,
+                               max(i.new_end - i.new_start for i in intervals) <= 8)
+        if structural != interpretation[0]:
+            interpretation.append(structural)
+        if repetition and repetition not in {"Used once", "One continuous appearance", "Recurs in multiple passages",
+                                            "Repeated throughout the track", "Repeated in the selected sections"} and not repetition.startswith("Repetition not"):
+            if repetition == "A short loop repeated in the track":
+                interpretation.append("The excerpt is used as a short repeating loop.")
+            else:
+                interpretation.append(f"The repetition follows the selected pattern: “{fragment(repetition, 14)}”.")
         lyrics = feature(path, "lyrics")
         if lyrics:
-            interpretation.append(f"The supplied lyric excerpt is “{fragment(lyrics, 14)}”.")
-        limits = []
-        if has_partial_matches(intervals):
-            limits.append("only checked portions are located, so reuse may extend further or recur elsewhere")
-        if any(i.end_review for i in intervals):
-            limits.append("some endings are uncertain and may extend beyond the displayed times")
-        if any(row and (row.context_only or (row.probe and key(row.probe) != key(i)))
-               for i in intervals for row in [rows.get(key(i))]):
-            limits.append("instrument estimates apply only to the checked audio")
-        if limits:
-            interpretation.append("These details remain estimates: " + "; ".join(limits) + ".")
-        stories.append(([opening, example, usage], interpretation))
+            interpretation.append(f"The borrowed lyric phrase is “{fragment(lyrics, 14)}”.")
+        stories.append((facts, interpretation[:4]))
     if len(stories) == 1:
         return "\n\n".join(" ".join(part) for part in stories[0] if part)
-    # Legacy cases can have recording and composition paths. Keep one paragraph
-    # per path; their full descriptions and caveats remain in the evidence list.
-    return "\n\n".join(" ".join(facts[:3] + interpretation[:1])
-                        for facts, interpretation in stories[:2])
+    return "\n\n".join(" ".join(facts[:3] + interpretation[:1]) for facts, interpretation in stories[:2])
 
 
 def evidence_lines(analysis, paths, model_name=None):
@@ -214,35 +184,27 @@ def evidence_lines(analysis, paths, model_name=None):
             continue
         lines.append("Recording sample (master)" if rights == "master" else "Replayed melody or lyrics (publishing)")
         automatic = automatic_path(path)
-        if automatic:
-            lines.append("Sample timings are automatically estimated; description reviewed separately.")
-        elif path.locate.detection_status not in {"verified", "not_detected"}:
-            lines.append("Use has not been confirmed. Automated matching needs listening review.")
-        elif path.locate.detection_status == "not_detected":
-            lines.append("No reuse identified in this rights path; this is not a legal conclusion.")
         for n, item in enumerate(path.locate.sample_occurrences, 1):
             approx = "≈ " if item.end_review else ""
             lines.append(f"{n}. In new track: {timestamp(item.new_start)}–{approx}{timestamp(item.new_end)}; "
                          f"in original: {timestamp(item.original_start)}–{approx}{timestamp(item.original_end)}")
             if rights == "master":
-                lines.append("   " + sound_note(rows.get(key(item))))
-        if any(i.end_review for i in path.locate.sample_occurrences):
-            lines.append("Some endings are uncertain and may extend beyond the estimated times.")
+                note = sound_note(rows.get(key(item)))
+                if note:
+                    lines.append("   " + note)
         families = group_loop_families(path.locate.sample_occurrences, analysis.durations["new"])
         for family in families:
             if family.occurrence_count > 1:
-                qualifier = "" if path.locate.detection_status == "verified" or automatic else "possible "
-                lines.append(f"Group {family.family_number}: {family.occurrence_count} {qualifier}appearances ({family.candidate_count} timing rows).")
+                lines.append(f"Group {family.family_number}: {family.occurrence_count} appearances ({family.candidate_count} timing rows).")
         if (path.locate.detection_status == "verified" or automatic) and path.locate.total_covered_seconds is not None and path.locate.coverage_percentage is not None:
             label = "Located portions" if automatic and has_partial_matches(path.locate.sample_occurrences) else "Estimated total use" if automatic else "Reviewed total use"
             lines.append(f"{label}: {path.locate.total_covered_seconds:.2f}s ({path.locate.coverage_percentage:.1f}% of the new track)")
         # Preserve long creator-supplied presets outside the bounded narrative.
         for label, value in [("Sound", feature(path, "musical_element")), ("How used", path.describe.reuse_type),
                              ("Repetition", path.describe.repetition), ("Role", path.describe.role_in_new_song)]:
-            if value and fragment(value, 14) != value.rstrip(".!?"):
+            if value and value not in METHOD_DEFAULTS | {ROLE_UNKNOWN} and not value.startswith("Repetition not") and fragment(value, 14) != value.rstrip(".!?"):
                 lines.append(f"{label} (full description): {value}")
         if feature(path, "lyrics"):
             lines.append("Reused lyrics supplied for this draft: " + feature(path, "lyrics"))
-        lines.extend(path.describe.limitations)
         lines.append("")
     return lines

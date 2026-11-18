@@ -45,7 +45,7 @@ def test_web_review_and_throughout_export_preserve_automated_evidence(example):
     assert missing_document_inputs(reviewed) == []
     assert "throughout the track" in document_text(reviewed)
     story, appendix = document_text(reviewed).split("Exact timestamps and evidence")
-    assert "0:01.00" not in story
+    assert "0:01.00" in story
     assert "0:01.00–0:03.00" in appendix
     assert example.model_dump() == before
 

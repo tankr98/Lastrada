@@ -76,7 +76,13 @@ module.exports = async (page, data, scenario, errors) => {
     await wording.fill((await wording.inputValue()) + "\n\nMy additional draft note.");
     await settled(page);
   }
-  if (scenario === "prefilled") assert((await element.inputValue()).includes("Guitar"));
+  if (scenario === "prefilled") {
+    for (const label of ["Drums", "Bass", "Guitar", "Piano", "Vocals"])
+      assert((await element.inputValue()).includes(label), `${label} must survive the table-to-draft handoff`);
+    for (const term of ["drum", "bass", "guitar", "piano", "vocal"])
+      assert(initialStory.toLowerCase().includes(term), `${term} must appear in the prose`);
+    assert(!/unverified|unconfirmed|uncertain|not been assessed/i.test(await page.locator("#draftDocument").innerText()));
+  }
   if (scenario === "recovered") {
     assert((await element.inputValue()).includes("Bass"));
     await page.locator("#draftEvidence summary").click();
@@ -86,7 +92,7 @@ module.exports = async (page, data, scenario, errors) => {
     await page.waitForFunction(() => document.querySelector('[data-field="element"]')?.value.includes("source sounds include vocals"));
     await settled(page);
     assert((await element.inputValue()).includes("source sounds include vocals"));
-    assert((await page.locator("#draftDocument").innerText()).includes("vocals estimated in the source"));
+    assert(!(await page.locator("#draftDocument").innerText()).includes("vocal phrase"), "Source presence alone must not become sampled vocals");
   }
   assert((await lyrics.inputValue()).includes("Not assessed"));
   if (["reload_edits", "automatic", "automatic_subset", "early_result"].includes(scenario)) {
@@ -203,6 +209,11 @@ module.exports = async (page, data, scenario, errors) => {
   const text = fs.readFileSync(await (await ready).path(), "utf8");
   assert.strictEqual(text, await page.locator("#draftDocument").textContent(), "Preview and export must agree");
   assert(!text.includes("Reused lyrics: Not assessed"));
+  if (scenario === "prefilled") {
+    for (const term of ["drum", "bass", "guitar", "piano", "vocal"])
+      assert(text.toLowerCase().includes(term), `${term} must survive export`);
+    assert(!/unverified|unconfirmed|uncertain|not been assessed/i.test(text));
+  }
   if (["placement_edit", "draft_race"].includes(scenario)) assert(text.includes("in the intro and outro") && !text.includes("throughout the track"));
   await page.reload();
   await page.getByRole("heading", { name: "Your Nature of Use.", exact: true }).waitFor();
@@ -221,7 +232,7 @@ module.exports = async (page, data, scenario, errors) => {
     assert.strictEqual(JSON.stringify(data.analysis), stored, "Regenerating does not change the stored review");
     await page.getByText("Earlier draft wording", { exact: true }).click();
     assert.strictEqual(await page.locator("#previousWording pre").textContent(), longWording);
-    assert((await page.locator("#draftDocument").textContent()).includes("Draft — review required"));
+    assert((await page.locator("#draftDocument").textContent()).includes("Draft"));
     await page.getByRole("button", { name: "Confirm Nature of Use", exact: true }).click();
     await page.getByText("Reviewed and ready to download.", { exact: true }).first().waitFor();
     assert.strictEqual(data.analysis.review.corrected.nature_of_use.text, short);

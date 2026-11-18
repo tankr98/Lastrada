@@ -21,6 +21,28 @@ TERMINAL = {"checked", "no_source"}
 MIN_PROBE_SECONDS = 2.0
 
 
+def matched_instruments(row):
+    """Use a measured row's own accepted stems before a cached group summary.
+
+    Older grouped results could overwrite guitar/piano/vocal evidence with a
+    drums-only group label. Recover those labels on read without rerunning Demucs.
+    Presence and context are not evidence that an instrument was sampled.
+    """
+    if row.status != "checked" or row.context_only:
+        return []
+    if row.evidence:
+        return list(dict.fromkeys(
+            LABELS[item.new_song_stem]
+            for item in row.evidence
+            if item.dtw_result == "accepted" and item.scope == "sample"
+            and item.new_song_stem in LABELS
+            and item.source_stem in {item.new_song_stem, "full_mix"}
+            and (item.duration_ratio is None or 0.5 <= item.duration_ratio <= 2)
+        ))
+    # Unmeasured members can carry a repeated-passage group's consensus.
+    return list(dict.fromkeys(row.suggested_instruments))
+
+
 def occurrence_id(interval):
     values = [
         getattr(interval, k) for k in ("new_start", "new_end", "original_start", "original_end")
@@ -56,6 +78,7 @@ def occurrence_rows(result, model_name=None):
                 "no_source",
                 "Original-track times are needed for an instrument comparison.",
             )
+        row.suggested_instruments = matched_instruments(row)
         rows.append(row)
     return rows
 

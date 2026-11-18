@@ -68,9 +68,9 @@ def test_table_draft_prefills_selected_times_without_saving_or_approving():
     assert result["paths"]["master"]["placement"] == "intro_only"
     assert result["paths"]["master"]["lyrics"] == LYRICS_UNASSESSED
     assert all(result["paths"]["master"][key] for key in ("element", "method", "repetition", "role", "sections"))
-    assert "Draft — review required" in result["document"]
+    assert "NATURE OF USE\nDraft\n" in result["document"]
     assert "Lyrics: Not assessed" not in result["document"]
-    assert "Reused lyrics have not been assessed." in result["document"]
+    assert "Reused lyrics have not been assessed." not in result["document"]
     assert not result["paths"]["master"]["details_confirmed"]
 
 

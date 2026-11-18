@@ -242,7 +242,8 @@ def apply_review(analysis: Analysis, payload: ReviewPayload, model_name=None):
     } if analysis.review.corrected else None
     changed = previous_paths is not None and description_signature(paths) != description_signature(previous_paths)
     supplied = payload.narrative.strip()
-    narrative = generated if changed or not supplied else supplied
+    stale_generated = supplied == analysis.review.generated_narrative and supplied != generated
+    narrative = generated if changed or not supplied or stale_generated else supplied
     previous_narrative = analysis.review.previous_narrative
     saved_narrative = (analysis.review.corrected or {}).get("nature_of_use", {}).get("text")
     if payload.table_draft and saved_narrative and saved_narrative != narrative:
