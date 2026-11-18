@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from lastrada import pipeline
-from lastrada.alignment import dtw
+from lastrada.alignment import dtw, mixture
 from lastrada.alignment.local import refine_candidate
 from lastrada.alignment.stems import bounded_stem_probe, compare_candidate_stems
 from lastrada.audio.io import Audio
@@ -41,15 +41,15 @@ def test_600_second_direct_match_keeps_full_times_with_bounded_real_dtw(monkeypa
                 crop_duration=crop.duration, model_name="test", cache_path=Path("unused"),
             )
 
-    local_cost = dtw._local_cost
+    containment_cost = mixture._containment_cost
 
     def bounded_cost(source, target):
         # Check before the real quadratic allocation, not after it.
         assert source.shape[1] <= 251 and target.shape[1] <= 501
         matrices.append((source.shape[1], target.shape[1]))
-        return local_cost(source, target)
+        return containment_cost(source, target)
 
-    monkeypatch.setattr(dtw, "_local_cost", bounded_cost)
+    monkeypatch.setattr(mixture, "_containment_cost", bounded_cost)
     settings = Settings(stem_enabled=True, stem_separation_padding_seconds=4,
                         dtw_max_pitch_shift_semitones=0)
     updated, comparisons = pipeline.stem_assist_candidates(audio, audio, [direct], Separator(), settings)
