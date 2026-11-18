@@ -3,8 +3,11 @@
 
 import argparse
 import json
+import os
 from pathlib import Path
+import re
 import subprocess
+import tempfile
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -29,6 +32,16 @@ PERMISSIONS = [
     "firebasehosting.sites.create", "firebasehosting.sites.get",
     "firebasehosting.sites.update", "firebaseauth.configs.get", "firebaseauth.configs.update",
 ]
+MARKER = "sri"
+FIREBASE = ["npx", "--yes", "firebase-tools@15.4.0"]
+
+
+def cloud(*args):
+    return json.loads(run("gcloud", *args, "--project", PROJECT, "--format=json"))
+
+
+def account(role):
+    return f"{PREFIX}-{role}@{PROJECT}.iam.gserviceaccount.com"
 
 
 def run(*args):
@@ -85,8 +98,200 @@ def inspect():
     return result
 
 
+def source_identity(sha):
+    branch = os.getenv("GITHUB_REF_NAME") or run("git", "branch", "--show-current")
+    if branch != BRANCH or not re.fullmatch(r"[0-9a-f]{40}", sha or ""):
+        raise ValueError(f"Deploy from {BRANCH} with its exact 40-character commit")
+    if run("git", "rev-parse", "HEAD") != sha or run("git", "status", "--porcelain"):
+        raise ValueError("Deployment requires a clean checkout of the requested commit")
+    return {"branch": BRANCH, "commit": sha, "profile": "stem-fast", "dirty": False}
+
+
+def original_snapshot():
+    """Read original services, traffic, access and Hosting configuration unchanged."""
+    return {
+        "hosting": request("https://lastrada-alt.web.app/config.json"),
+        **{
+            f"{role}_{operation}": cloud(
+                "run", "services", operation, f"lastrada-{role}", "--region", REGION
+            )
+            for role in ("api", "worker")
+            for operation in ("describe", "get-iam-policy")
+        },
+    }
+
+
+def ensure_marked(resource):
+    if resource and resource.get("labels", {}).get("lastrada-managed") != MARKER:
+        raise ValueError("Refusing to modify an existing resource without the SRI marker")
+
+
+def service_environment(role, identity, original, worker_url=None):
+    old_env = {
+        item["name"]: item.get("value")
+        for item in original[f"{role}_describe"]["spec"]["template"]["spec"]["containers"][0].get("env", [])
+    }
+    env = {
+        key: old_env[key]
+        for key in ("LASTRADA_USER_DAILY_JOBS", "LASTRADA_DAILY_JOBS", "LASTRADA_SAMPLEID_CHECKPOINT_URL")
+        if old_env.get(key)
+    }
+    env.update({
+        "GOOGLE_CLOUD_PROJECT": PROJECT,
+        "LASTRADA_REGION": REGION,
+        "LASTRADA_BUILD_SHA": identity["commit"],
+        "LASTRADA_BUILD_BRANCH": BRANCH,
+        "LASTRADA_CASE_BUCKET": BUCKET,
+        "LASTRADA_TASK_QUEUE": QUEUE,
+        "LASTRADA_ACCESS": "google",
+        "LASTRADA_SERVICE_MODE": role,
+        "LASTRADA_ORIGINS": ",".join(ORIGINS),
+    })
+    if role == "api":
+        if not worker_url:
+            raise ValueError("SRI worker URL is required")
+        env.update(LASTRADA_WORKER_URL=worker_url, LASTRADA_TASK_ACCOUNT=account("tasks"))
+    return env
+
+
+def deploy(sha, image):
+    identity = source_identity(sha)
+    if image != f"ghcr.io/tankr98/lastrada:{sha}":
+        raise ValueError("Use the image built and tested for this exact SRI commit")
+    original = original_snapshot()
+    if original["hosting"].get("firebase", {}).get("projectId") != PROJECT:
+        raise ValueError("Original Firebase configuration does not match this project")
+    token = run("gcloud", "auth", "print-access-token")
+
+    def api(path, **kwargs):
+        return request(path, token=token, **kwargs)
+
+    # All newly provisioned resources have SRI names and their own identities.
+    for role in ("api", "worker", "tasks"):
+        url = f"https://iam.googleapis.com/v1/projects/{PROJECT}/serviceAccounts/{account(role)}"
+        current = api(url, allow_missing=True)
+        description = "Managed by Lastrada SRI deployment"
+        if current and current.get("description") != description:
+            raise ValueError("Refusing to reuse an unmarked service account")
+        if current is None:
+            run("gcloud", "iam", "service-accounts", "create", f"{PREFIX}-{role}",
+                "--project", PROJECT, "--description", description)
+
+    with tempfile.TemporaryDirectory() as directory:
+        temp = Path(directory)
+
+        def json_file(name, value):
+            path = temp / name
+            path.write_text(json.dumps(value))
+            return str(path)
+
+        bucket = api(f"https://storage.googleapis.com/storage/v1/b/{BUCKET}", allow_missing=True)
+        ensure_marked(bucket)
+        if bucket is None:
+            # Create with ownership marker atomically so interrupted runs can resume.
+            api(f"https://storage.googleapis.com/storage/v1/b?project={PROJECT}", method="POST", data={
+                "name": BUCKET, "location": REGION, "labels": {"lastrada-managed": MARKER},
+                "iamConfiguration": {"uniformBucketLevelAccess": {"enabled": True},
+                                     "publicAccessPrevention": "enforced"},
+            })
+        run("gcloud", "storage", "buckets", "update", f"gs://{BUCKET}",
+            "--public-access-prevention", "--lifecycle-file", json_file("lifecycle.json", {
+                "rule": [{"action": {"type": "Delete"}, "condition": {"age": 7}}],
+            }), "--cors-file", json_file("cors.json", [{
+                "origin": ORIGINS, "method": ["PUT", "POST", "GET", "HEAD"],
+                "responseHeader": ["Content-Type", "Location", "Range", "ETag"], "maxAgeSeconds": 3600,
+            }]))
+        for role in ("api", "worker"):
+            run("gcloud", "storage", "buckets", "add-iam-policy-binding", f"gs://{BUCKET}",
+                "--member", "serviceAccount:" + account(role), "--role", "roles/storage.objectUser")
+
+        parent = f"projects/{PROJECT}/locations/{REGION}"
+        queue_url = f"https://cloudtasks.googleapis.com/v2/{parent}/queues/{QUEUE}"
+        queue = api(queue_url, allow_missing=True)
+        if queue is None:
+            api(f"https://cloudtasks.googleapis.com/v2/{parent}/queues", method="POST", data={
+                "name": f"{parent}/queues/{QUEUE}",
+                "rateLimits": {"maxConcurrentDispatches": 1, "maxDispatchesPerSecond": 1},
+                "retryConfig": {"maxAttempts": 3, "minBackoff": "30s", "maxBackoff": "300s"},
+            })
+        # Queue-scoped permission, without changing the project's IAM policy.
+        policy = api(queue_url + ":getIamPolicy", method="POST", data={})
+        binding = {"role": "roles/cloudtasks.enqueuer", "members": ["serviceAccount:" + account("api")]}
+        bindings = policy.setdefault("bindings", [])
+        if binding not in bindings:
+            bindings.append(binding)
+            api(queue_url + ":setIamPolicy", method="POST", data={"policy": policy})
+        run("gcloud", "iam", "service-accounts", "add-iam-policy-binding", account("tasks"),
+            "--project", PROJECT, "--member", "serviceAccount:" + account("api"),
+            "--role", "roles/iam.serviceAccountUser")
+
+        worker_url = None
+        for role in ("worker", "api"):
+            name = f"{PREFIX}-{role}"
+            service = api(f"https://run.googleapis.com/v2/{parent}/services/{name}", allow_missing=True)
+            ensure_marked(service)
+            env = service_environment(role, identity, original, worker_url)
+            worker = role == "worker"
+            run("gcloud", "run", "deploy", name, "--project", PROJECT, "--region", REGION,
+                "--image", image, "--labels=lastrada-managed=sri", "--service-account", account(role),
+                "--no-allow-unauthenticated" if worker else "--allow-unauthenticated",
+                "--cpu=2" if worker else "--cpu=1", "--memory=4Gi" if worker else "--memory=1Gi",
+                "--concurrency=1" if worker else "--concurrency=20", "--min-instances=0",
+                "--max-instances=1" if worker else "--max-instances=2",
+                "--timeout=1800" if worker else "--timeout=300",
+                "--env-vars-file", json_file(role + ".json", env), "--quiet")
+            if worker:
+                run("gcloud", "run", "services", "add-iam-policy-binding", name,
+                    "--project", PROJECT, "--region", REGION,
+                    "--member", "serviceAccount:" + account("tasks"), "--role", "roles/run.invoker")
+            run("gcloud", "run", "services", "update-traffic", name, "--project", PROJECT,
+                "--region", REGION, "--to-latest", "--quiet")
+            url = cloud("run", "services", "describe", name, "--region", REGION)["status"]["url"]
+            if worker:
+                worker_url = url
+            else:
+                api_url = url
+
+        health = request(api_url + "/health")
+        if any(health.get(k) != v for k, v in {"status": "ok", "branch": BRANCH, "commit": sha}.items()):
+            raise ValueError("SRI API health does not match the requested release")
+        site_url = f"https://firebasehosting.googleapis.com/v1beta1/projects/{PROJECT}/sites"
+        if api(site_url + "/" + SITE, allow_missing=True) is None:
+            api(site_url + "?siteId=" + SITE, method="POST", data={})
+
+        # Retain every existing Google sign-in domain; only add the SRI hosts.
+        auth_url = f"https://identitytoolkit.googleapis.com/admin/v2/projects/{PROJECT}/config"
+        auth = api(auth_url)
+        domains = auth.get("authorizedDomains", [])
+        additions = [origin.removeprefix("https://") for origin in ORIGINS if origin.removeprefix("https://") not in domains]
+        if additions:
+            api(auth_url + "?updateMask=authorizedDomains", method="PATCH",
+                data={"authorizedDomains": domains + additions})
+        config = {**original["hosting"], "apiBase": api_url, "build": identity}
+        (ROOT / "web/public/config.json").write_text(json.dumps(config, indent=2) + "\n")
+        hosting = json.loads((ROOT / "firebase.json").read_text())
+        hosting["hosting"]["site"] = SITE
+        hosting["hosting"]["public"] = str(ROOT / "web/public")
+        run(*FIREBASE, "deploy", "--only", "hosting", "--project", PROJECT,
+            "--config", json_file("firebase.json", hosting), "--non-interactive")
+        deployed = request(ORIGINS[0] + "/config.json?release=" + sha)
+        if deployed != config:
+            raise ValueError("SRI Hosting configuration differs from the verified build")
+
+    if original_snapshot() != original:
+        raise ValueError("Original stack changed during deployment; inspect before continuing")
+    result = {"site": ORIGINS[0], "api": api_url, "commit": sha, "original_stack_unchanged": True}
+    print(json.dumps(result, indent=2))
+    print("::notice title=SRI deployed::" + json.dumps(result))
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=["inspect"], default="inspect")
-    parser.parse_args()
-    inspect()
+    parser.add_argument("--mode", choices=["inspect", "apply"], default="inspect")
+    parser.add_argument("--sha")
+    parser.add_argument("--image")
+    args = parser.parse_args()
+    if args.mode == "apply":
+        deploy(args.sha, args.image)
+    else:
+        inspect()

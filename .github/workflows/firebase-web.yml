@@ -60,6 +60,30 @@ jobs:
       - run: npm run test:instruments --prefix web
       - run: python deploy/bootstrap.py
 
+  build-sri:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/local/stem-fast-v-SRI'
+    needs: web
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the tested SRI image for isolated Cloud Shell deployment
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/tankr98/lastrada:${GITHUB_SHA}"
+          printf '%s' "${GHCR_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          DOCKER_BUILDKIT=1 docker build \
+            --file deploy/Dockerfile \
+            --label org.opencontainers.image.source=https://github.com/tankr98/Lastrada \
+            --label org.opencontainers.image.revision="${GITHUB_SHA}" \
+            --tag "${IMAGE}" .
+          docker push "${IMAGE}"
+          docker logout ghcr.io
+          docker manifest inspect "${IMAGE}" >/dev/null
+          echo "::notice title=SRI image ready::${IMAGE}"
+
   deploy-backend:
     if: github.event_name == 'push' && github.ref == 'refs/heads/local/stem-fast'
     needs: web

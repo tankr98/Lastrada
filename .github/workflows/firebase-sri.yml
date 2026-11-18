@@ -45,6 +45,25 @@ jobs:
         run: gcloud auth activate-service-account --key-file="${GOOGLE_APPLICATION_CREDENTIALS}" --project=lastrada-64bab
       - name: Inspect only; no cloud resources are changed
         run: python deploy/sri.py --mode inspect
+      - name: Check provisioning API methods without changing resources
+        run: |
+          python - <<'PY'
+          import json
+          from urllib.request import urlopen
+          for service, version, group in [
+              ('cloudtasks', 'v2', ['projects', 'locations', 'queues']),
+              ('firebasehosting', 'v1beta1', ['projects', 'sites']),
+          ]:
+              with urlopen(f'https://{service}.googleapis.com/$discovery/rest?version={version}', timeout=30) as response:
+                  definition = json.load(response)
+              for resource in group:
+                  definition = definition['resources'][resource]
+              for name in ['create', 'getIamPolicy', 'setIamPolicy']:
+                  method = definition['methods'].get(name)
+                  if method:
+                      print(f'::notice title=Provisioning API::{service} {name}: {method["httpMethod"]} {method["path"]}')
+                      assert method['httpMethod'] == 'POST'
+          PY
       - name: Remove temporary credentials
         if: always()
         run: rm -f "${RUNNER_TEMP}/sri-account.json"

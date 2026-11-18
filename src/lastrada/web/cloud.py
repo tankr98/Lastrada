@@ -80,7 +80,8 @@ class Queue:
     def enqueue(self, owner, analysis_id, operation, task_id):
         project = os.environ["GOOGLE_CLOUD_PROJECT"]
         location = os.getenv("LASTRADA_REGION", "us-central1")
-        parent = self.client.queue_path(project, location, "lastrada-analysis")
+        queue = os.getenv("LASTRADA_TASK_QUEUE", "lastrada-analysis")
+        parent = self.client.queue_path(project, location, queue)
         url = os.environ["LASTRADA_WORKER_URL"].rstrip("/")
         self.client.create_task(
             parent=parent,

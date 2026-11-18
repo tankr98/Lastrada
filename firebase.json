@@ -1,6 +1,6 @@
 {
   "hosting": {
-    "site": "lastrada-alt",
+    "site": "lastrada-sri",
     "public": "web/public",
     "ignore": ["firebase.json", "**/.*", "config.example.json"],
     "headers": [

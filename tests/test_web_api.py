@@ -163,7 +163,8 @@ def test_daily_quota_rejects_excess_work(monkeypatch):
         store.quota(owner_key("alice"))
 
 
-def test_cloud_task_targets_private_worker_with_oidc(monkeypatch):
+@pytest.mark.parametrize("queue_name", [None, "lastrada-sri-analysis"])
+def test_cloud_task_targets_private_worker_with_oidc(monkeypatch, queue_name):
     from lastrada.web.cloud import Queue
     from google.cloud import tasks_v2
 
@@ -175,10 +176,17 @@ def test_cloud_task_targets_private_worker_with_oidc(monkeypatch):
     monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "lastrada-64bab")
     monkeypatch.setenv("LASTRADA_WORKER_URL", "https://worker.example")
     monkeypatch.setenv("LASTRADA_TASK_ACCOUNT", "tasks@example.iam.gserviceaccount.com")
+    if queue_name is None:
+        monkeypatch.delenv("LASTRADA_TASK_QUEUE", raising=False)
+    else:
+        monkeypatch.setenv("LASTRADA_TASK_QUEUE", queue_name)
     Queue().enqueue(
         owner_key("alice"), "00000000-0000-4000-8000-000000000001", "analyze", "job-test"
     )
     task = mock.create_task.call_args.kwargs["task"]
+    mock.queue_path.assert_called_once_with(
+        "lastrada-64bab", "us-central1", queue_name or "lastrada-analysis"
+    )
     assert task["http_request"]["url"] == "https://worker.example/internal/process"
     assert task["http_request"]["oidc_token"]["audience"] == "https://worker.example"
     assert task["dispatch_deadline"].seconds == 1800
