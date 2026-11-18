@@ -79,7 +79,10 @@ def test_access_verification_requires_sign_in_private_worker_and_sri_cors(
             sri.verify_access("https://api.test", "https://worker.test")
 
 
-def test_new_stack_only_mutates_sri_resources_and_preserves_sign_in(monkeypatch, tmp_path):
+@pytest.mark.parametrize("resume_with_propagation_delay", [False, True])
+def test_new_stack_only_mutates_sri_resources_and_preserves_sign_in(
+    monkeypatch, tmp_path, resume_with_propagation_delay,
+):
     identity = {"branch": sri.BRANCH, "commit": SHA, "profile": "stem-fast", "dirty": False}
     original = {
         "hosting": {"firebase": {"projectId": sri.PROJECT, "apiKey": "public-key"},
@@ -102,13 +105,22 @@ def test_new_stack_only_mutates_sri_resources_and_preserves_sign_in(monkeypatch,
     monkeypatch.setattr(sri, "verify_access", lambda api, worker: None)
     snapshots = []
     monkeypatch.setattr(sri, "original_snapshot", lambda: snapshots.append(True) or original)
-    commands, mutations, envs = [], [], {}
+    commands, mutations, envs, waits = [], [], {}, []
+    monkeypatch.setattr(sri.time, "sleep", waits.append)
 
     def run(*args):
         commands.append(args)
         if args[:3] == ("gcloud", "auth", "print-access-token"):
             return "not-a-real-token"
+        if (resume_with_propagation_delay and
+                args[:4] == ("gcloud", "storage", "buckets", "add-iam-policy-binding") and
+                "serviceAccount:" + sri.account("worker") in args and commands.count(args) <= 2):
+            raise RuntimeError(
+                "gcloud storage failed: ERROR: (gcloud.storage.buckets.add-iam-policy-binding) "
+                f"HTTPError 400: Service account {sri.account('worker')} does not exist."
+            )
         if args[:3] == ("gcloud", "run", "deploy"):
+            assert waits == ([5, 10] if resume_with_propagation_delay else [])
             assert args[3] in {"lastrada-sri-api", "lastrada-sri-worker"}
             envs[args[3]] = json.loads(Path(args[args.index("--env-vars-file") + 1]).read_text())
         if "hosting" in args:
@@ -123,6 +135,11 @@ def test_new_stack_only_mutates_sri_resources_and_preserves_sign_in(monkeypatch,
         if url.startswith("https://lastrada-sri.web.app/config.json"):
             return json.loads((tmp_path / "web/public/config.json").read_text())
         if allow_missing:
+            if resume_with_propagation_delay:
+                if "iam.googleapis.com" in url:
+                    return {"description": "Managed by Lastrada SRI deployment"}
+                if "storage.googleapis.com" in url:
+                    return {"labels": {"lastrada-managed": "sri"}}
             return None
         if url.endswith("/health"):
             return {"status": "ok", "branch": sri.BRANCH, "commit": SHA}
@@ -153,3 +170,46 @@ def test_new_stack_only_mutates_sri_resources_and_preserves_sign_in(monkeypatch,
     assert envs["lastrada-sri-api"]["LASTRADA_TASK_ACCOUNT"] == sri.account("tasks")
     worker = next(c for c in commands if c[:4] == ("gcloud", "run", "deploy", "lastrada-sri-worker"))
     assert "--no-allow-unauthenticated" in worker and "--max-instances=1" in worker
+    if resume_with_propagation_delay:
+        assert not any(c[:4] == ("gcloud", "iam", "service-accounts", "create") for c in commands)
+        assert not any(url == f"https://storage.googleapis.com/storage/v1/b?project={sri.PROJECT}"
+                       for url, _, _ in mutations)
+
+
+@pytest.mark.parametrize("message", [
+    "HTTPError 403: Permission denied",
+    "HTTPError 400: Invalid role",
+    "HTTPError 400: Service account unrelated@example.com does not exist.",
+    "HTTPError 403: Service account lastrada-sri-worker@lastrada-64bab.iam.gserviceaccount.com does not exist.",
+    "Request timed out; outcome unknown",
+])
+def test_iam_errors_other_than_sri_account_propagation_are_not_retried(monkeypatch, message):
+    calls, waits = [], []
+
+    def fail(*args):
+        calls.append(args)
+        raise RuntimeError(message)
+
+    monkeypatch.setattr(sri, "run", fail)
+    monkeypatch.setattr(sri.time, "sleep", waits.append)
+    with pytest.raises(RuntimeError, match=message):
+        sri.grant_access("gcloud", "storage", "buckets", "add-iam-policy-binding",
+                         f"gs://{sri.BUCKET}", member_role="worker", iam_role="roles/storage.objectUser")
+    assert len(calls) == 1 and not waits
+
+
+def test_account_propagation_wait_is_bounded_and_retains_the_cloud_error(monkeypatch):
+    calls, waits = [], []
+
+    def fail(*args):
+        calls.append(args)
+        raise RuntimeError(f"HTTPError 400: Service account {sri.account('worker')} does not exist.")
+
+    monkeypatch.setattr(sri, "run", fail)
+    monkeypatch.setattr(sri.time, "sleep", waits.append)
+    with pytest.raises(RuntimeError, match="95 seconds.*existing SRI resources are retained") as caught:
+        sri.grant_access("gcloud", "storage", "buckets", "add-iam-policy-binding",
+                         f"gs://{sri.BUCKET}", member_role="worker", iam_role="roles/storage.objectUser")
+    assert "HTTPError 400" in str(caught.value.__cause__)
+    assert len(calls) == 6 and len(set(calls)) == 1
+    assert sum(waits) == 95

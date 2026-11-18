@@ -39,6 +39,11 @@ services, traffic, IAM and public configuration before and after deployment,
 verifies the new API and Hosting build, and reports the new URL. It fails on
 permission errors rather than treating them as missing resources. Interrupted
 provisioning can leave SRI resources created; inspect the error before resuming.
+New service accounts can take time to become visible to other Google services.
+The setup retries a rejected IAM binding only when Google explicitly returns
+HTTP 400 saying the intended SRI account does not exist, waiting up to 95 seconds.
+Permission denials and unrelated failures stop immediately. Rerunning the setup
+reuses its marked SRI resources without deleting them.
 
 Sign in on the new URL and test an upload after the first deployment. Automated
 health and configuration checks do not constitute an end-to-end audio analysis.

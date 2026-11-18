@@ -52,6 +52,32 @@ def run(*args):
     return result.stdout.strip()
 
 
+def grant_access(*args, member_role, iam_role):
+    """Retry only a rejected binding for a not-yet-propagated SRI account."""
+    if member_role not in {"api", "worker", "tasks"}:
+        raise ValueError("Only SRI runtime accounts can receive these bindings")
+    email = account(member_role)
+    delays = (5, 10, 20, 30, 30)
+    for attempt in range(len(delays) + 1):
+        try:
+            return run(*args, "--member", "serviceAccount:" + email, "--role", iam_role)
+        except RuntimeError as error:
+            message = str(error).lower()
+            # Do not retry permission denials, uncertain timeouts, or unrelated
+            # missing resources. This 400 rejects the idempotent IAM binding.
+            if ("httperror 400" not in message or
+                    f"service account {email} does not exist" not in message):
+                raise
+            if attempt == len(delays):
+                raise RuntimeError(
+                    f"Google Cloud still does not recognize {email} after "
+                    f"{sum(delays)} seconds of waiting. Rerun the SRI deployment "
+                    "after account creation propagates; existing SRI resources are retained."
+                ) from error
+            print(f"Waiting {delays[attempt]}s for Google Cloud to recognize {email}...", flush=True)
+            time.sleep(delays[attempt])
+
+
 def request(url, *, token=None, method="GET", data=None, allow_missing=False):
     headers = {"Content-Type": "application/json"}
     if token:
@@ -226,8 +252,8 @@ def deploy(sha, image):
                 "responseHeader": ["Content-Type", "Location", "Range", "ETag"], "maxAgeSeconds": 3600,
             }]))
         for role in ("api", "worker"):
-            run("gcloud", "storage", "buckets", "add-iam-policy-binding", f"gs://{BUCKET}",
-                "--member", "serviceAccount:" + account(role), "--role", "roles/storage.objectUser")
+            grant_access("gcloud", "storage", "buckets", "add-iam-policy-binding", f"gs://{BUCKET}",
+                         member_role=role, iam_role="roles/storage.objectUser")
 
         parent = f"projects/{PROJECT}/locations/{REGION}"
         queue_url = f"https://cloudtasks.googleapis.com/v2/{parent}/queues/{QUEUE}"
@@ -245,9 +271,8 @@ def deploy(sha, image):
         if binding not in bindings:
             bindings.append(binding)
             api(queue_url + ":setIamPolicy", method="POST", data={"policy": policy})
-        run("gcloud", "iam", "service-accounts", "add-iam-policy-binding", account("tasks"),
-            "--project", PROJECT, "--member", "serviceAccount:" + account("api"),
-            "--role", "roles/iam.serviceAccountUser")
+        grant_access("gcloud", "iam", "service-accounts", "add-iam-policy-binding", account("tasks"),
+                     "--project", PROJECT, member_role="api", iam_role="roles/iam.serviceAccountUser")
 
         worker_url = None
         for role in ("worker", "api"):
@@ -266,9 +291,9 @@ def deploy(sha, image):
                 "--timeout=1800" if worker else "--timeout=300",
                 "--env-vars-file", json_file(role + ".json", env), "--quiet")
             if worker:
-                run("gcloud", "run", "services", "add-iam-policy-binding", name,
-                    "--project", PROJECT, "--region", REGION,
-                    "--member", "serviceAccount:" + account("tasks"), "--role", "roles/run.invoker")
+                grant_access("gcloud", "run", "services", "add-iam-policy-binding", name,
+                             "--project", PROJECT, "--region", REGION,
+                             member_role="tasks", iam_role="roles/run.invoker")
             run("gcloud", "run", "services", "update-traffic", name, "--project", PROJECT,
                 "--region", REGION, "--to-latest", "--quiet")
             url = cloud("run", "services", "describe", name, "--region", REGION)["status"]["url"]
