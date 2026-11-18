@@ -18,6 +18,7 @@ from lastrada.alignment.dtw import (
     refine_candidate_dtw_details,
     refine_candidate_rhythm_details,
 )
+from lastrada.alignment.mixture import refine_candidate_mixture_details
 from lastrada.audio.io import Audio
 from lastrada.schemas.models import Interval
 from lastrada.separation.demucs import SeparatedRegion
@@ -301,12 +302,29 @@ def compare_candidate_stems(
             if use_source_full_mix
             else source_region.stems[source_stem]
         )
+        derivative_audio = derivative_region.stems[derivative_stem]
+
         if derivative_stem == "drums":
             detail = refine_candidate_rhythm_details(
                 source_audio,
-                derivative_region.stems[derivative_stem],
+                derivative_audio,
                 local_interval,
                 search_padding=dtw_search_padding,
+                minimum_duration_ratio=minimum_duration_ratio,
+                maximum_duration_ratio=maximum_duration_ratio,
+                minimum_duration=minimum_duration,
+            )
+        elif use_source_full_mix and derivative_stem != "full_mix":
+            # Symmetric stem-to-stem chroma distance is inappropriate when the
+            # source side is a dense mix. Every pitched derivative stem instead
+            # uses asymmetric content containment plus mandatory order evidence.
+            detail = refine_candidate_mixture_details(
+                source_audio,
+                derivative_audio,
+                local_interval,
+                stem=derivative_stem,
+                search_padding=dtw_search_padding,
+                max_pitch_shift_semitones=max_pitch_shift_semitones,
                 minimum_duration_ratio=minimum_duration_ratio,
                 maximum_duration_ratio=maximum_duration_ratio,
                 minimum_duration=minimum_duration,
@@ -314,7 +332,7 @@ def compare_candidate_stems(
         else:
             detail = refine_candidate_dtw_details(
                 source_audio,
-                derivative_region.stems[derivative_stem],
+                derivative_audio,
                 local_interval,
                 search_padding=dtw_search_padding,
                 max_pitch_shift_semitones=max_pitch_shift_semitones,

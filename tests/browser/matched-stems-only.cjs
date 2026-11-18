@@ -51,34 +51,41 @@ try {
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     await page.waitForFunction(
       () =>
-        document.querySelectorAll(".stemEvidenceItem").length === 2 &&
-        [...document.querySelectorAll(".dtwResult")].every(
-          (item) => item.textContent === "Supporting evidence",
-        ),
+        document.querySelectorAll(".stemEvidenceItem").length === 4 &&
+        document.querySelectorAll('[data-stem-comparison-status="accepted"]').length === 2,
     );
 
-    assert.strictEqual(await page.locator(".stemEvidenceItem").count(), 2);
-    assert.strictEqual(await page.locator(".dtwResult.rejected").count(), 0);
-    assert.strictEqual(await page.locator(".dtwResult.weak").count(), 0);
-    assert.strictEqual(await page.locator(".moreStemEvidence").count(), 0);
+    assert.strictEqual(await page.locator(".stemEvidenceItem").count(), 4);
+    assert.strictEqual(await page.locator(".dtwResult.rejected").count(), 1);
+    assert.strictEqual(await page.locator(".dtwResult.weak").count(), 1);
+    assert.strictEqual(await page.locator(".moreStemEvidence").count(), 1);
     assert.strictEqual(
-      await page.locator("[data-stem-dtw-evidence]").getAttribute("data-accepted-stem-count"),
-      "2",
+      await page.locator(".dtwResult.accepted").first().textContent(),
+      "Supporting match",
     );
+    assert.strictEqual(
+      await page.locator(".dtwResult.weak").textContent(),
+      "Weak / review",
+    );
+    assert.strictEqual(
+      await page.locator(".dtwResult.rejected").textContent(),
+      "No supporting match",
+    );
+    const cell = page.locator("[data-stem-dtw-evidence]");
+    assert.strictEqual(await cell.getAttribute("data-accepted-stem-count"), "2");
+    assert.strictEqual(await cell.getAttribute("data-stem-comparison-count"), "4");
 
-    await page.locator("[data-stem-dtw-evidence]").evaluate((cell) => {
-      cell.innerHTML = `<div class="stemEvidenceList">
+    await cell.evaluate((node) => {
+      node.innerHTML = `<div class="stemEvidenceList">
         <div class="stemEvidenceItem"><div><strong>Bass → Bass</strong><span class="dtwResult rejected">Rejected</span></div></div>
       </div><small class="evidenceProgress">1 matched moment checked</small>`;
     });
-    await page.getByText("No supporting stem match", { exact: true }).waitFor();
-    assert.strictEqual(await page.locator(".stemEvidenceItem").count(), 0);
-    assert.strictEqual(
-      await page.locator("[data-stem-dtw-evidence]").getAttribute("data-accepted-stem-count"),
-      "0",
-    );
+    await page.getByText("No supporting match", { exact: true }).waitFor();
+    assert.strictEqual(await page.locator(".stemEvidenceItem").count(), 1);
+    assert.strictEqual(await cell.getAttribute("data-accepted-stem-count"), "0");
+    assert.strictEqual(await cell.getAttribute("data-stem-comparison-count"), "1");
 
-    console.log("Matched stem display tests passed");
+    console.log("All stem comparison display tests passed");
   } finally {
     await browser.close();
     server.close();

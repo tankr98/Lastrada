@@ -1,10 +1,10 @@
 """Grouped, bounded and parallel stem evidence for the deployed review flow.
 
-The frontend still receives one row per suggested timestamp.  Internally, those
+The frontend still receives one row per suggested timestamp. Internally, those
 rows are grouped with the same loop-family logic used by the reviewer interface.
-Only a small, diverse set of representative occurrences is separated.  A group
-verdict is then propagated back to the existing rows without changing the UI
-contract.
+Only a small, diverse set of representative occurrences is separated. Every
+selected representative is checked so one early-positive stem cannot suppress
+evidence for the remaining derivative stems.
 """
 
 from __future__ import annotations
@@ -372,10 +372,9 @@ def _process_group(
         elif row.status == "failed":
             failure_count += 1
 
-        if max(support_counts.values(), default=0) >= positive_needed:
-            break
-        if negative_count >= negative_needed:
-            break
+        # Do not stop when one label reaches quorum. Every selected representative
+        # must contribute so guitar, piano, bass, vocals and other can reach their
+        # own confirmation threshold after drums or another early-positive stem.
 
     supported_labels = sorted(
         label for label, count in support_counts.items() if count >= positive_needed
@@ -463,9 +462,10 @@ def run_grouped_instruments(
         with persist_lock:
             stabilize_source_descriptions(rows, source_descriptions)
             updated.methods["instruments"] = (
-                f"demucs_{settings.stem_model_name}_grouped_representatives_v1; "
+                f"demucs_{settings.stem_model_name}_grouped_representatives_v2; "
                 f"workers={settings.stem_group_workers}; "
-                f"max_representatives={settings.stem_group_max_representatives}"
+                f"max_representatives={settings.stem_group_max_representatives}; "
+                "all_stem_quorums"
             )
             updated.timings_seconds["instrument_checks"] = monotonic() - began
             updated.stem_evidence = [
@@ -536,7 +536,7 @@ def run_grouped_instruments(
 
     updated.methods["stems"] = (
         f"demucs_{settings.stem_model_name}_grouped; "
-        "same-stem DTW; representative confirmation required"
+        "all derivative stems compared; representative confirmation required"
     )
     persist()
     return updated
