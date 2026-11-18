@@ -45,5 +45,12 @@ HTTP 400 saying the intended SRI account does not exist, waiting up to 95 second
 Permission denials and unrelated failures stop immediately. Rerunning the setup
 reuses its marked SRI resources without deleting them.
 
+Firebase Auth requests explicitly use `lastrada-64bab` as the quota project for
+Cloud Shell user credentials. Reading Auth configuration is checked before any
+provisioning, and failures report Google's reason without displaying the access
+token. A quota-project header does not grant permissions: an actual permission
+denial still stops deployment. The setup rereads authorized domains immediately
+before adding SRI's domains so changes made during provisioning are retained.
+
 Sign in on the new URL and test an upload after the first deployment. Automated
 health and configuration checks do not constitute an end-to-end audio analysis.

@@ -1,6 +1,7 @@
 """The experimental deployment must never write to the original stack."""
 
 import importlib.util
+import io
 from contextlib import nullcontext
 import json
 from pathlib import Path
@@ -47,6 +48,72 @@ def test_only_not_found_is_treated_as_absent(monkeypatch, status, missing):
     else:
         with pytest.raises(RuntimeError, match=f"HTTP {status}"):
             sri.request("https://example.test", allow_missing=True)
+
+
+@pytest.mark.parametrize("method", ["GET", "PATCH"])
+def test_auth_requests_attach_target_quota_project_without_changing_other_requests(monkeypatch, method):
+    requests = []
+
+    def respond(req, **kwargs):
+        requests.append(req)
+        return io.BytesIO(b'{}')
+
+    monkeypatch.setattr(sri, "urlopen", respond)
+    url = sri.AUTH_CONFIG_URL + ("?updateMask=authorizedDomains" if method == "PATCH" else "")
+    sri.request(url, token="test-token", method=method)
+    assert requests[-1].get_header("X-goog-user-project") == sri.PROJECT
+    assert requests[-1].get_header("Authorization") == "Bearer test-token"
+    for other in ("https://example.test", sri.AUTH_CONFIG_URL + ".different"):
+        sri.request(other, token="test-token")
+        assert requests[-1].get_header("X-goog-user-project") is None
+    sri.request(sri.AUTH_CONFIG_URL)
+    assert requests[-1].get_header("X-goog-user-project") is None
+
+
+def test_google_rejection_reports_reason_and_redacts_token_before_truncation(monkeypatch):
+    token = "test-secret-token"
+    body = {"error": {
+        "message": "Quota project required: " + token,
+        "details": [{"@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                     "reason": "USER_PROJECT_DENIED", "metadata": {
+                         "service": "identitytoolkit.googleapis.com",
+                         "permission": "serviceusage.services.use", "credential": token,
+                     }}],
+    }}
+
+    def denied(req, **kwargs):
+        raise HTTPError(req.full_url, 403, "Forbidden", {}, io.BytesIO(json.dumps(body).encode()))
+
+    monkeypatch.setattr(sri, "urlopen", denied)
+    with pytest.raises(RuntimeError, match="USER_PROJECT_DENIED") as caught:
+        sri.request(sri.AUTH_CONFIG_URL, token=token)
+    assert "serviceusage.services.use" in str(caught.value)
+    assert "[redacted]" in str(caught.value) and token not in str(caught.value)
+    body["error"]["message"] = "x" * 1495 + token
+    with pytest.raises(RuntimeError) as caught:
+        sri.request(sri.AUTH_CONFIG_URL, token=token)
+    assert "test-secret" not in str(caught.value)
+
+
+def test_auth_preflight_denial_stops_before_any_provisioning(monkeypatch):
+    monkeypatch.setattr(sri, "source_identity", lambda _: {})
+    monkeypatch.setattr(sri, "original_snapshot", lambda: {"hosting": {"firebase": {"projectId": sri.PROJECT}}})
+    calls = []
+
+    def run(*args):
+        calls.append(args)
+        assert args == ("gcloud", "auth", "print-access-token")
+        return "test-token"
+
+    def denied(url, **kwargs):
+        assert url == sri.AUTH_CONFIG_URL and kwargs == {"token": "test-token"}
+        raise RuntimeError("HTTP 403: USER_PROJECT_DENIED")
+
+    monkeypatch.setattr(sri, "run", run)
+    monkeypatch.setattr(sri, "request", denied)
+    with pytest.raises(RuntimeError, match="USER_PROJECT_DENIED"):
+        sri.deploy(SHA, f"ghcr.io/tankr98/lastrada:{SHA}")
+    assert len(calls) == 1
 
 
 def test_unmarked_existing_resources_are_not_reused():
@@ -105,7 +172,7 @@ def test_new_stack_only_mutates_sri_resources_and_preserves_sign_in(
     monkeypatch.setattr(sri, "verify_access", lambda api, worker: None)
     snapshots = []
     monkeypatch.setattr(sri, "original_snapshot", lambda: snapshots.append(True) or original)
-    commands, mutations, envs, waits = [], [], {}, []
+    commands, mutations, envs, waits, auth_reads = [], [], {}, [], []
     monkeypatch.setattr(sri.time, "sleep", waits.append)
 
     def run(*args):
@@ -144,7 +211,9 @@ def test_new_stack_only_mutates_sri_resources_and_preserves_sign_in(
         if url.endswith("/health"):
             return {"status": "ok", "branch": sri.BRANCH, "commit": SHA}
         if "identitytoolkit" in url:
-            return {"authorizedDomains": ["lastrada-alt.web.app", "custom.example"]}
+            auth_reads.append(url)
+            return {"authorizedDomains": ["lastrada-alt.web.app", "custom.example"] +
+                    (["recently-added.example"] if len(auth_reads) > 1 else [])}
         raise AssertionError(url)
 
     monkeypatch.setattr(sri, "run", run)
@@ -157,8 +226,10 @@ def test_new_stack_only_mutates_sri_resources_and_preserves_sign_in(
         assert command[:3] != ("gcloud", "projects", "add-iam-policy-binding")
     assert all("lastrada-alt" not in url for url, _, _ in mutations)
     auth_changes = [data for url, method, data in mutations if "identitytoolkit" in url]
+    assert len(auth_reads) == 2
     assert auth_changes == [{"authorizedDomains": [
-        "lastrada-alt.web.app", "custom.example", "lastrada-sri.web.app", "lastrada-sri.firebaseapp.com",
+        "lastrada-alt.web.app", "custom.example", "recently-added.example",
+        "lastrada-sri.web.app", "lastrada-sri.firebaseapp.com",
     ]}]
     for env in envs.values():
         assert env["LASTRADA_CASE_BUCKET"] == "lastrada-64bab-lastrada-sri-cases"

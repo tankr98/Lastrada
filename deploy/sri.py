@@ -21,6 +21,7 @@ PREFIX = "lastrada-sri"
 BUCKET = PROJECT + "-lastrada-sri-cases"
 QUEUE = PREFIX + "-analysis"
 ORIGINS = [f"https://{SITE}.web.app", f"https://{SITE}.firebaseapp.com"]
+AUTH_CONFIG_URL = f"https://identitytoolkit.googleapis.com/admin/v2/projects/{PROJECT}/config"
 PERMISSIONS = [
     "run.services.create", "run.services.get", "run.services.update",
     "run.services.getIamPolicy", "run.services.setIamPolicy",
@@ -82,6 +83,10 @@ def request(url, *, token=None, method="GET", data=None, allow_missing=False):
     headers = {"Content-Type": "application/json"}
     if token:
         headers["Authorization"] = "Bearer " + token
+        if url == AUTH_CONFIG_URL or url.startswith(AUTH_CONFIG_URL + "?"):
+            # Cloud Shell user tokens need an explicit quota project for this
+            # client-based API. This does not change the caller's permissions.
+            headers["X-Goog-User-Project"] = PROJECT
     req = Request(url, method=method, headers=headers,
                   data=None if data is None else json.dumps(data).encode())
     try:
@@ -90,7 +95,32 @@ def request(url, *, token=None, method="GET", data=None, allow_missing=False):
     except HTTPError as error:
         if error.code == 404 and allow_missing:
             return None
-        raise RuntimeError(f"{method} {url} returned HTTP {error.code}") from None
+        detail = google_error_detail(error, token)
+        raise RuntimeError(f"{method} {url} returned HTTP {error.code}" +
+                           (f": {detail}" if detail else "")) from None
+
+
+def google_error_detail(error, token):
+    """Retain Google's reason for a rejection without logging credentials."""
+    try:
+        payload = json.loads(error.read(16384))
+    except (ValueError, OSError):
+        return ""
+    problem = payload.get("error") if isinstance(payload, dict) else None
+    if not isinstance(problem, dict):
+        return ""
+    parts = [str(problem.get("message", ""))]
+    details = problem.get("details", [])
+    for item in details if isinstance(details, list) else []:
+        if not isinstance(item, dict) or item.get("@type") != "type.googleapis.com/google.rpc.ErrorInfo":
+            continue
+        parts.append(str(item.get("reason", "")))
+        metadata = item.get("metadata", {})
+        if isinstance(metadata, dict):
+            parts.extend(f"{key}={metadata[key]}" for key in ("service", "consumer", "permission")
+                         if key in metadata)
+    text = "; ".join(part for part in parts if part)
+    return (text.replace(token, "[redacted]") if token else text)[:2000]
 
 
 def inspect():
@@ -214,6 +244,10 @@ def deploy(sha, image):
     def api(path, **kwargs):
         return request(path, token=token, **kwargs)
 
+    # Fail before provisioning if the Cloud Shell identity cannot read Auth.
+    print("Checking Firebase sign-in configuration access...", flush=True)
+    api(AUTH_CONFIG_URL)
+
     # All newly provisioned resources have SRI names and their own identities.
     print("Preparing the separate SRI service accounts...", flush=True)
     for role in ("api", "worker", "tasks"):
@@ -312,12 +346,13 @@ def deploy(sha, image):
             api(site_url + "?siteId=" + SITE, method="POST", data={})
 
         # Retain every existing Google sign-in domain; only add the SRI hosts.
-        auth_url = f"https://identitytoolkit.googleapis.com/admin/v2/projects/{PROJECT}/config"
-        auth = api(auth_url)
+        # Read again immediately before merging to preserve domains added since
+        # the preflight check, including those used by the original website.
+        auth = api(AUTH_CONFIG_URL)
         domains = auth.get("authorizedDomains", [])
         additions = [origin.removeprefix("https://") for origin in ORIGINS if origin.removeprefix("https://") not in domains]
         if additions:
-            api(auth_url + "?updateMask=authorizedDomains", method="PATCH",
+            api(AUTH_CONFIG_URL + "?updateMask=authorizedDomains", method="PATCH",
                 data={"authorizedDomains": domains + additions})
         config = {**original["hosting"], "apiBase": api_url, "build": identity}
         (ROOT / "web/public/config.json").write_text(json.dumps(config, indent=2) + "\n")
