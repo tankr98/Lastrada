@@ -2,8 +2,8 @@ from pathlib import Path
 
 import numpy as np
 
-from lastrada.alignment.dtw import DTWRefinementResult
 from lastrada.alignment import stems as stem_alignment
+from lastrada.alignment.dtw import DTWRefinementResult
 from lastrada.alignment.stems import candidate_stem_pairs, compare_candidate_stems
 from lastrada.audio.io import Audio
 from lastrada.schemas.models import Interval
@@ -67,7 +67,7 @@ def test_stem_comparison_maps_local_alignment_back_to_song_time(monkeypatch, tmp
             new_end=6.5,
             original_start=interval.original_start,
             original_end=interval.original_end,
-            source="dtw_chroma_local_alignment",
+            source="dtw_mixture_chroma_local_alignment",
             status="candidate",
             similarity=interval.similarity,
         )
@@ -85,7 +85,7 @@ def test_stem_comparison_maps_local_alignment_back_to_song_time(monkeypatch, tmp
             path_points=10,
         )
 
-    monkeypatch.setattr(stem_alignment, "refine_candidate_dtw_details", fake_refine)
+    monkeypatch.setattr(stem_alignment, "refine_candidate_mixture_details", fake_refine)
 
     interval = Interval(
         new_start=50.0,
